@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -127,6 +128,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextLayoutResult
@@ -1085,69 +1087,58 @@ private fun FloatingNavBar(
                             transformOrigin = if (isExpanded) TransformOrigin(0f, 0f) else TransformOrigin(0f, 1f)
                         ) + fadeOut(tween(120))
                     ) {
-                        Surface(
-                            shape = RoundedCornerShape(24.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            tonalElevation = 3.dp,
-                            shadowElevation = 8.dp
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .width(IntrinsicSize.Max)
-                                    .padding(vertical = 8.dp, horizontal = 4.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                        // Three separate cards with gaps between them (no divider lines). The outer
+                        // IntrinsicSize.Max + each card's fillMaxWidth makes all sections equal width.
+                        @Composable
+                        fun MenuSection(shape: Shape, content: @Composable ColumnScope.() -> Unit) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = shape,
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                tonalElevation = 3.dp,
+                                shadowElevation = 8.dp
                             ) {
-                                val menuDivider = @Composable {
-                                    HorizontalDivider(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f)
-                                    )
-                                }
-                                // Section 1: tab / page actions.
-                                BrowserMenuItem(
-                                    icon = Icons.Default.Add,
-                                    label = "New tab",
-                                    onClick = { onNewTab(); showMenu = false }
+                                Column(
+                                    modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    content = content
                                 )
+                            }
+                        }
+                        // Connected-group corners: 16 on the group's outer corners, 8 on the corners
+                        // facing the 2dp gaps between sections.
+                        val outerR = 16.dp
+                        val innerR = 8.dp
+                        Column(
+                            modifier = Modifier.width(IntrinsicSize.Max),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            MenuSection(
+                                RoundedCornerShape(topStart = outerR, topEnd = outerR, bottomStart = innerR, bottomEnd = innerR)
+                            ) {
+                                BrowserMenuItem(Icons.Default.Add, "New tab") { onNewTab(); showMenu = false }
                                 BrowserMenuItem(
-                                    icon = if (isBookmarked) Icons.Default.Bookmark else Icons.Outlined.Bookmark,
-                                    label = if (isBookmarked) "Remove bookmark" else "Add bookmark",
-                                    onClick = { onToggleBookmark(); showMenu = false }
-                                )
+                                    if (isBookmarked) Icons.Default.Bookmark else Icons.Outlined.Bookmark,
+                                    if (isBookmarked) "Remove bookmark" else "Add bookmark"
+                                ) { onToggleBookmark(); showMenu = false }
+                                BrowserMenuItem(Icons.Default.FindInPage, "Find in page") { onFindInPage(); showMenu = false }
+                                BrowserMenuItem(Icons.Default.Share, "Share") { onShare(); showMenu = false }
+                            }
+                            MenuSection(RoundedCornerShape(innerR)) {
                                 BrowserMenuItem(
-                                    icon = Icons.Default.FindInPage,
-                                    label = "Find in page",
-                                    onClick = { onFindInPage(); showMenu = false }
-                                )
+                                    Icons.Default.DesktopWindows,
+                                    if (isDesktopSite) "Request mobile site" else "Request desktop site"
+                                ) { onToggleDesktopSite(); showMenu = false }
                                 BrowserMenuItem(
-                                    icon = Icons.Default.Share,
-                                    label = "Share",
-                                    onClick = { onShare(); showMenu = false }
-                                )
-                                menuDivider()
-                                // Section 2: how the page renders.
-                                BrowserMenuItem(
-                                    icon = Icons.Default.DesktopWindows,
-                                    label = if (isDesktopSite) "Request mobile site" else "Request desktop site",
-                                    onClick = { onToggleDesktopSite(); showMenu = false }
-                                )
-                                BrowserMenuItem(
-                                    icon = Icons.Default.Code,
-                                    label = if (isJavaScriptEnabled) "Disable JavaScript" else "Enable JavaScript",
-                                    onClick = { onToggleJavaScript(); showMenu = false }
-                                )
-                                BrowserMenuItem(
-                                    icon = Icons.Default.Brush,
-                                    label = "Custom CSS",
-                                    onClick = { onCustomCss(); showMenu = false }
-                                )
-                                menuDivider()
-                                // Section 3: app settings.
-                                BrowserMenuItem(
-                                    icon = Icons.Default.Settings,
-                                    label = "Settings",
-                                    onClick = { onOpenSettings(); showMenu = false }
-                                )
+                                    Icons.Default.Code,
+                                    if (isJavaScriptEnabled) "Disable JavaScript" else "Enable JavaScript"
+                                ) { onToggleJavaScript(); showMenu = false }
+                                BrowserMenuItem(Icons.Default.Brush, "Custom CSS") { onCustomCss(); showMenu = false }
+                            }
+                            MenuSection(
+                                RoundedCornerShape(topStart = innerR, topEnd = innerR, bottomStart = outerR, bottomEnd = outerR)
+                            ) {
+                                BrowserMenuItem(Icons.Default.Settings, "Settings") { onOpenSettings(); showMenu = false }
                             }
                         }
                     }
