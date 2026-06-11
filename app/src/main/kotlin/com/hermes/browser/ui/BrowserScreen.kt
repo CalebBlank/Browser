@@ -116,7 +116,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -211,7 +217,8 @@ fun BrowserScreen(
     themeFixedColor: Int = 0,
     onSelectThemeWebsite: () -> Unit = {},
     onSelectThemeSystem: () -> Unit = {},
-    onSelectThemeColor: (Int) -> Unit = {}
+    onSelectThemeColor: (Int) -> Unit = {},
+    onRequestRecolor: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -588,6 +595,8 @@ fun BrowserScreen(
                         UserCss.setCss(context, cssDomain, newCss)
                         // Live-apply to the current page without a reload.
                         cssPort.value?.postMessage(JSONObject().put("css", newCss))
+                        // The CSS may have changed the page background — re-match the status bar.
+                        onRequestRecolor()
                     }
                 },
                 onDismiss = { showCssSheet = false }
@@ -1528,6 +1537,91 @@ private val themePresetColors = listOf(
     0xFF7E57C2.toInt(), // purple
 )
 
+private fun cssHex(color: Int): String = "#%06X".format(0xFFFFFF and color)
+
+@Composable
+private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    val start = remember { FloatArray(3).also { android.graphics.Color.colorToHSV(initial, it) } }
+    var hue by remember { mutableStateOf(start[0]) }
+    var sat by remember { mutableStateOf(start[1]) }
+    var value by remember { mutableStateOf(start[2]) }
+    val current = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value))
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Pick a color") },
+        confirmButton = { TextButton(onClick = { onPick(current) }) { Text("Apply") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Saturation (x) / brightness (y) panel for the current hue.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(170.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .pointerInput(Unit) {
+                            detectTapGestures { o ->
+                                sat = (o.x / size.width).coerceIn(0f, 1f)
+                                value = (1f - o.y / size.height).coerceIn(0f, 1f)
+                            }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, _ ->
+                                sat = (change.position.x / size.width).coerceIn(0f, 1f)
+                                value = (1f - change.position.y / size.height).coerceIn(0f, 1f)
+                            }
+                        }
+                ) {
+                    val hueColor = ComposeColor(android.graphics.Color.HSVToColor(floatArrayOf(hue, 1f, 1f)))
+                    Canvas(Modifier.matchParentSize()) {
+                        drawRect(Brush.horizontalGradient(listOf(ComposeColor.White, hueColor)))
+                        drawRect(Brush.verticalGradient(listOf(ComposeColor.Transparent, ComposeColor.Black)))
+                        drawCircle(
+                            ComposeColor.White,
+                            radius = 12f,
+                            center = Offset(sat * size.width, (1f - value) * size.height),
+                            style = Stroke(width = 3f)
+                        )
+                    }
+                }
+                // Hue strip.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(26.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .pointerInput(Unit) {
+                            detectTapGestures { o -> hue = (o.x / size.width * 360f).coerceIn(0f, 360f) }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { c, _ -> hue = (c.position.x / size.width * 360f).coerceIn(0f, 360f) }
+                        }
+                ) {
+                    Canvas(Modifier.matchParentSize()) {
+                        val hues = (0..6).map {
+                            ComposeColor(android.graphics.Color.HSVToColor(floatArrayOf(it * 60f, 1f, 1f)))
+                        }
+                        drawRect(Brush.horizontalGradient(hues))
+                        val x = hue / 360f * size.width
+                        drawLine(ComposeColor.White, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(
+                        Modifier.size(36.dp).clip(CircleShape).background(ComposeColor(current))
+                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                    )
+                    Text(
+                        cssHex(current),
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CssSheet(
@@ -1538,10 +1632,12 @@ private fun CssSheet(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
     var css by remember { mutableStateOf(initialCss) }
     var prompt by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var editing by remember { mutableStateOf<Pair<String, Int>?>(null) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1606,17 +1702,85 @@ private fun CssSheet(
             error?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }
-            OutlinedTextField(
-                value = css,
-                onValueChange = { css = it },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 180.dp),
-                placeholder = { Text("/* CSS applied to ${domain.ifBlank { "this page" }} */") },
-                textStyle = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            // CSS editor (left, same width as the AI field above) + a right gutter of color swatches,
+            // each aligned to the line its color appears on. Tap a swatch to edit it.
+            val cssPad = 12.dp
+            var cssLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
+            val colorHits = remember(css) {
+                Regex("#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})")
+                    .findAll(css).mapNotNull { m ->
+                        val c = runCatching { android.graphics.Color.parseColor(m.value) }.getOrNull()
+                        if (c != null) Triple(m.value, c, m.range.first) else null
+                    }.toList()
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .heightIn(min = 180.dp)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                        .padding(cssPad)
+                ) {
+                    if (css.isEmpty()) {
+                        Text(
+                            "/* CSS applied to ${domain.ifBlank { "this page" }} */",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    BasicTextField(
+                        value = css,
+                        onValueChange = { css = it },
+                        onTextLayout = { cssLayout = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurface
+                        ),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary)
+                    )
+                }
+                // Gutter width matches the AI row's icon button so the CSS box == AI field width.
+                Box(modifier = Modifier.width(48.dp).heightIn(min = 180.dp)) {
+                    val layout = cssLayout
+                    if (layout != null) {
+                        colorHits.forEach { (token, color, offset) ->
+                            val box = runCatching {
+                                layout.getBoundingBox(offset.coerceIn(0, layout.layoutInput.text.length))
+                            }.getOrNull()
+                            if (box != null) {
+                                val yDp = with(density) { (cssPad.toPx() + box.center.y).toDp() } - 12.dp
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = 12.dp, y = yDp)
+                                        .size(24.dp)
+                                        .clip(CircleShape)
+                                        .background(ComposeColor(color))
+                                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                                        .clickable { editing = token to color }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            editing?.let { (token, value) ->
+                ColorPickerDialog(
+                    initial = value,
+                    onPick = { picked ->
+                        // Replace this token wherever it appears, but not when it's the prefix of a
+                        // longer hex (e.g. #fff inside #ffffff).
+                        css = css.replace(Regex(Regex.escape(token) + "(?![0-9a-fA-F])"), cssHex(picked))
+                        editing = null
+                    },
+                    onDismiss = { editing = null }
                 )
-            )
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically

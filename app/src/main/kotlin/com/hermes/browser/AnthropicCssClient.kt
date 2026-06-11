@@ -22,8 +22,12 @@ object AnthropicCssClient {
     ): Result<String> = runCatching {
         val system = "You write CSS user-styles injected into web pages on \"$domain\". " +
             "Output ONLY raw CSS — no markdown, no code fences, no commentary. Use robust selectors " +
-            "and add !important where needed to override the site's own styles. When the user is " +
-            "refining, build on the existing CSS rather than discarding it."
+            "and add !important where needed to override the site's own styles. " +
+            "IMPORTANT: many sites paint the visible page background on a full-height wrapper/root " +
+            "element, NOT on <body>. To change the background reliably, target html, body AND common " +
+            "containers together, e.g.: html, body, #root, #__next, #app, [id*=\"app\"], " +
+            "[class*=\"app\"], [class*=\"container\"], [class*=\"wrapper\"], main { background: … }. " +
+            "When the user is refining, build on the existing CSS rather than discarding it."
         val userContent = buildString {
             if (currentCss.isNotBlank()) append("Existing CSS:\n").append(currentCss).append("\n\n")
             append("Request: ").append(prompt)

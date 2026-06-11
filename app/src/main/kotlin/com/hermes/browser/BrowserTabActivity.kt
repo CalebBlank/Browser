@@ -117,6 +117,16 @@ class BrowserTabActivity : ComponentActivity() {
         }, delayMs)
     }
 
+    // After custom CSS is applied (live), the page may have re-rendered with a new background —
+    // re-sample its top strip and re-tint the status bar to match. The delay lets the CSS paint.
+    private fun resampleStatusBar() {
+        root.postDelayed({
+            captureGeckoViewAsync { bmp ->
+                bmp?.let { updateStatusBarColor(sampleTopColor(it), statusBarTransparent) }
+            }
+        }, 400)
+    }
+
     // Average a thin horizontal strip near the top of the page bitmap = the color behind the status bar.
     private fun sampleTopColor(bmp: android.graphics.Bitmap): Int {
         val w = bmp.width; val h = bmp.height
@@ -309,7 +319,8 @@ class BrowserTabActivity : ComponentActivity() {
                         themeFixedColor = themeFixedColor,
                         onSelectThemeWebsite = { setThemeMode("website") },
                         onSelectThemeSystem = { setThemeMode("system") },
-                        onSelectThemeColor = { c -> setThemeMode("fixed", c) }
+                        onSelectThemeColor = { c -> setThemeMode("fixed", c) },
+                        onRequestRecolor = { resampleStatusBar() }
                     )
                 }
             }
