@@ -88,8 +88,32 @@ class BrowserTabActivity : ComponentActivity() {
                         putExtra("task_id", taskId)
                     }
                 )
+                // Page is painted now: sample its top color for the status-bar tint (page-background
+                // color, like the old WebView build) and refresh the back-gesture snapshot.
+                captureGeckoViewAsync { bmp ->
+                    bmp?.let {
+                        currentPageShot = it
+                        updateStatusBarColor(sampleTopColor(it), statusBarTransparent)
+                    }
+                }
             }
         }, delayMs)
+    }
+
+    // Average a thin horizontal strip near the top of the page bitmap = the color behind the status bar.
+    private fun sampleTopColor(bmp: android.graphics.Bitmap): Int {
+        val w = bmp.width; val h = bmp.height
+        if (w <= 0 || h <= 0) return Color.WHITE
+        val y = (h * 0.02f).toInt().coerceIn(0, h - 1)
+        val x0 = (w * 0.25f).toInt(); val x1 = (w * 0.75f).toInt()
+        var r = 0L; var g = 0L; var b = 0L; var n = 0
+        var x = x0
+        while (x < x1) {
+            val p = bmp.getPixel(x, y)
+            r += Color.red(p); g += Color.green(p); b += Color.blue(p); n++
+            x += 6
+        }
+        return if (n == 0) Color.WHITE else Color.rgb((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
     }
 
     private val requestBrowserRole = registerForActivityResult(
