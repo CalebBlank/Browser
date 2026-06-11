@@ -274,6 +274,8 @@ fun BrowserScreen(
     // and the drawer toggle.
     val cssPort = remember { mutableStateOf<WebExtension.Port?>(null) }
     var showCssSheet by remember { mutableStateOf(false) }
+    // Latest page element outline (from the content script) — fed to the AI for precise selectors.
+    val cssContext = remember { mutableStateOf("") }
 
     // Wire the bundled usercss WebExtension's content-script messaging to THIS session. The extension
     // installs async (BrowserApp.ensureBuiltIn), so wait for it. The content script asks for its URL's
@@ -286,9 +288,14 @@ fun BrowserScreen(
                 cssPort.value = port
                 port.setDelegate(object : WebExtension.PortDelegate {
                     override fun onPortMessage(message: Any, port: WebExtension.Port) {
-                        val url = (message as? JSONObject)?.optString("url").orEmpty()
-                        val css = UserCss.getCssForUrl(context, url) ?: ""
-                        port.postMessage(JSONObject().put("css", css))
+                        val obj = message as? JSONObject ?: return
+                        if (obj.has("url")) {
+                            val css = UserCss.getCssForUrl(context, obj.optString("url")) ?: ""
+                            port.postMessage(JSONObject().put("css", css))
+                        }
+                        if (obj.has("context")) {
+                            cssContext.value = obj.optString("context")
+                        }
                     }
                     override fun onDisconnect(port: WebExtension.Port) {
                         if (cssPort.value === port) cssPort.value = null
@@ -590,12 +597,20 @@ fun BrowserScreen(
             CssSheet(
                 domain = cssDomain,
                 initialCss = remember(cssDomain) { UserCss.getCss(context, cssDomain) ?: "" },
+                pageContext = cssContext.value,
                 onSave = { newCss ->
                     if (cssDomain.isNotBlank()) {
                         UserCss.setCss(context, cssDomain, newCss)
                         // Live-apply to the current page without a reload.
                         cssPort.value?.postMessage(JSONObject().put("css", newCss))
                         // The CSS may have changed the page background — re-match the status bar.
+                        onRequestRecolor()
+                    }
+                },
+                onReset = {
+                    if (cssDomain.isNotBlank()) {
+                        UserCss.setCss(context, cssDomain, "")
+                        cssPort.value?.postMessage(JSONObject().put("css", ""))
                         onRequestRecolor()
                     }
                 },
@@ -1627,7 +1642,9 @@ private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: ()
 private fun CssSheet(
     domain: String,
     initialCss: String,
+    pageContext: String = "",
     onSave: (String) -> Unit,
+    onReset: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1685,7 +1702,7 @@ private fun CssSheet(
                                         RuntimeException("No Claude key found in Deck. Set it in Deck settings.")
                                     )
                                 AnthropicCssClient.generate(
-                                    creds.first, creds.second, domain.ifBlank { "this page" }, css, p
+                                    creds.first, creds.second, domain.ifBlank { "this page" }, css, p, pageContext
                                 )
                             }
                             busy = false
@@ -1784,8 +1801,12 @@ private fun CssSheet(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                TextButton(
+                    onClick = { css = ""; onReset() },
+                    enabled = domain.isNotBlank()
+                ) { Text("Reset", color = MaterialTheme.colorScheme.error) }
                 Spacer(Modifier.weight(1f))
+                TextButton(onClick = onDismiss) { Text("Cancel") }
                 Button(
                     onClick = { onSave(css); onDismiss() },
                     enabled = domain.isNotBlank()

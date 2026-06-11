@@ -18,7 +18,8 @@ object AnthropicCssClient {
         model: String,
         domain: String,
         currentCss: String,
-        prompt: String
+        prompt: String,
+        pageContext: String = ""
     ): Result<String> = runCatching {
         val system = "You write CSS user-styles injected into web pages on \"$domain\". " +
             "Output ONLY raw CSS — no markdown, no code fences, no commentary. " +
@@ -30,8 +31,15 @@ object AnthropicCssClient {
             "exists (e.g. #root, #__next, #app, [data-reactroot], main) so the new color shows " +
             "through. Do NOT put the page background on buttons, inputs, text fields, search boxes, " +
             "icons, cards, links, navigation bars, or toolbars — only the page itself. " +
+            "When a page element outline is provided, use it to choose EXACT selectors and to " +
+            "include or exclude the specific elements the request implies. " +
             "When the user is refining, build on the existing CSS rather than discarding it."
         val userContent = buildString {
+            if (pageContext.isNotBlank()) {
+                append("Page element outline (indented tag#id.class tree — use it to pick exact ")
+                append("selectors and include/exclude the right elements):\n")
+                append(pageContext).append("\n\n")
+            }
             if (currentCss.isNotBlank()) append("Existing CSS:\n").append(currentCss).append("\n\n")
             append("Request: ").append(prompt)
         }
