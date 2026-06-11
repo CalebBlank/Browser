@@ -33,7 +33,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -187,7 +189,12 @@ fun BrowserScreen(
     onSessionStateChanged: (GeckoSession.SessionState) -> Unit = {},
     onCanGoBackChanged: (Boolean) -> Unit = {},
     onPageInfo: (url: String, title: String) -> Unit = { _, _ -> },
-    onPageScroll: (Int) -> Unit = {}
+    onPageScroll: (Int) -> Unit = {},
+    themeMode: String = "website",
+    themeFixedColor: Int = 0,
+    onSelectThemeWebsite: () -> Unit = {},
+    onSelectThemeSystem: () -> Unit = {},
+    onSelectThemeColor: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -434,6 +441,11 @@ fun BrowserScreen(
                     lastKnownColor.value?.let { onPageBackgroundColor(it, newValue) }
                 },
                 onSetDefaultBrowser = onSetDefaultBrowser,
+                themeMode = themeMode,
+                themeFixedColor = themeFixedColor,
+                onSelectThemeWebsite = onSelectThemeWebsite,
+                onSelectThemeSystem = onSelectThemeSystem,
+                onSelectThemeColor = onSelectThemeColor,
                 onDismiss = { showSettings = false }
             )
         }
@@ -1339,12 +1351,27 @@ private fun FindBar(
     }
 }
 
+// Material seed presets for the "Theme color" picker (Website / System / a fixed accent).
+private val themePresetColors = listOf(
+    0xFF1A73E8.toInt(), // blue
+    0xFF009688.toInt(), // teal
+    0xFF43A047.toInt(), // green
+    0xFFFB8C00.toInt(), // amber
+    0xFFE91E63.toInt(), // pink
+    0xFF7E57C2.toInt(), // purple
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSheet(
     transparent: Boolean,
     onTransparentChange: (Boolean) -> Unit,
     onSetDefaultBrowser: () -> Unit,
+    themeMode: String = "website",
+    themeFixedColor: Int = 0,
+    onSelectThemeWebsite: () -> Unit = {},
+    onSelectThemeSystem: () -> Unit = {},
+    onSelectThemeColor: (Int) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     ModalBottomSheet(
@@ -1378,6 +1405,46 @@ private fun SettingsSheet(
                         onClick = { onTransparentChange(false) },
                         shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
                     ) { Text("Opaque") }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Theme color",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        selected = themeMode == "website",
+                        onClick = onSelectThemeWebsite,
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    ) { Text("Website") }
+                    SegmentedButton(
+                        selected = themeMode == "system",
+                        onClick = onSelectThemeSystem,
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                    ) { Text("System") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    themePresetColors.forEach { c ->
+                        val selected = themeMode == "fixed" && themeFixedColor == c
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(ComposeColor(c))
+                                .border(
+                                    width = if (selected) 3.dp else 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.onSurface
+                                            else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = CircleShape
+                                )
+                                .clickable { onSelectThemeColor(c) }
+                        )
+                    }
                 }
             }
             Row(

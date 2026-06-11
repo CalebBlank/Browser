@@ -66,6 +66,11 @@ class BrowserTabActivity : ComponentActivity() {
     // applying its color after the user has already moved on to a different site.
     private var currentDomain: String? = null
 
+    // Theme color source (Settings): "website" = favicon seed, "system" = dynamic color,
+    // "fixed" = the chosen Material preset (themeFixedColor). Persisted in browser_prefs.
+    private var themeMode by mutableStateOf("website")
+    private var themeFixedColor by mutableStateOf(0xFF1A73E8.toInt())
+
     // Predictive-back snapshot animation.
     private var backSnapshotBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     private var backAnimProgress by mutableStateOf(0f)
@@ -237,13 +242,20 @@ class BrowserTabActivity : ComponentActivity() {
 
         val statusBarBg = View(this).also { statusBarBgView = it }
 
-        statusBarTransparent = getSharedPreferences("browser_prefs", MODE_PRIVATE)
-            .getBoolean("status_bar_transparent", true)
+        val prefs = getSharedPreferences("browser_prefs", MODE_PRIVATE)
+        statusBarTransparent = prefs.getBoolean("status_bar_transparent", true)
+        themeMode = prefs.getString("theme_mode", "website") ?: "website"
+        themeFixedColor = prefs.getInt("theme_fixed_color", 0xFF1A73E8.toInt())
 
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                BrowserTheme(seedColor = seedColor) {
+                val effectiveSeed = when (themeMode) {
+                    "system" -> null              // dynamic Material You
+                    "fixed" -> themeFixedColor    // chosen preset
+                    else -> seedColor             // "website" = favicon (null until it loads)
+                }
+                BrowserTheme(seedColor = effectiveSeed) {
                     BrowserScreen(
                         session = session,
                         statusBarHeightPx = statusBarHeightPx,
@@ -292,7 +304,12 @@ class BrowserTabActivity : ComponentActivity() {
                             // before onSessionStateChange fires still lands on its page, not the default.
                             if (url.startsWith("http")) runCatching { urlFile().writeText(url) }
                         },
-                        onPageScroll = { pageScrollY = it }
+                        onPageScroll = { pageScrollY = it },
+                        themeMode = themeMode,
+                        themeFixedColor = themeFixedColor,
+                        onSelectThemeWebsite = { setThemeMode("website") },
+                        onSelectThemeSystem = { setThemeMode("system") },
+                        onSelectThemeColor = { c -> setThemeMode("fixed", c) }
                     )
                 }
             }
@@ -354,6 +371,15 @@ class BrowserTabActivity : ComponentActivity() {
             params.topMargin = margin
             swipeRefresh.requestLayout()
         }
+    }
+
+    private fun setThemeMode(mode: String, color: Int? = null) {
+        themeMode = mode
+        if (color != null) themeFixedColor = color
+        getSharedPreferences("browser_prefs", MODE_PRIVATE).edit().apply {
+            putString("theme_mode", mode)
+            if (color != null) putInt("theme_fixed_color", color)
+        }.apply()
     }
 
     private fun updateStatusBarColor(color: Int, transparent: Boolean) {
