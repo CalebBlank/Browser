@@ -184,7 +184,8 @@ fun BrowserScreen(
     onPageLoaded: () -> Unit = {},
     onNavigatingAway: () -> Unit = {},
     onSessionStateChanged: (GeckoSession.SessionState) -> Unit = {},
-    onCanGoBackChanged: (Boolean) -> Unit = {}
+    onCanGoBackChanged: (Boolean) -> Unit = {},
+    onPageInfo: (url: String, title: String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -276,6 +277,7 @@ fun BrowserScreen(
                 if (url.isNotEmpty() && !url.startsWith("about:") && !url.startsWith("data:")) {
                     HistoryDatabase.get(context).record(url, pageTitle.value.ifEmpty { url })
                 }
+                onPageInfo(url, pageTitle.value)
             }
 
             override fun onProgressChange(s: GeckoSession, progress: Int) {
@@ -320,6 +322,7 @@ fun BrowserScreen(
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(s: GeckoSession, title: String?) {
                 pageTitle.value = title ?: ""
+                onPageInfo(currentUrl.value, pageTitle.value)
             }
 
             override fun onContextMenu(

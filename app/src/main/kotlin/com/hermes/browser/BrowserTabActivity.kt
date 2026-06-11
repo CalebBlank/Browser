@@ -50,6 +50,7 @@ class BrowserTabActivity : ComponentActivity() {
     // Fed by BrowserScreen's delegates.
     private var latestState: GeckoSession.SessionState? = null
     private var canGoBack = false
+    private val faviconCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
 
     // Predictive-back snapshot animation.
     private var backSnapshotBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
@@ -223,7 +224,8 @@ class BrowserTabActivity : ComponentActivity() {
                             currentPageShot = null
                         },
                         onSessionStateChanged = { latestState = it },
-                        onCanGoBackChanged = { canGoBack = it }
+                        onCanGoBackChanged = { canGoBack = it },
+                        onPageInfo = { url, title -> updateTaskDescription(url, title) }
                     )
                 }
             }
@@ -296,6 +298,38 @@ class BrowserTabActivity : ComponentActivity() {
     private fun isLightColor(color: Int): Boolean {
         val r = Color.red(color); val g = Color.green(color); val b = Color.blue(color)
         return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
+    }
+
+    // Tab title + favicon in system recents (and Deck once integrated). GeckoView doesn't push
+    // favicons, so fetch the site's OWN /favicon.ico (engine-independent; never a third party, to
+    // avoid leaking every visited domain).
+    private fun updateTaskDescription(url: String, title: String) {
+        val label = title.ifBlank { url }.take(80)
+        runCatching {
+            @Suppress("DEPRECATION")
+            setTaskDescription(android.app.ActivityManager.TaskDescription(label))
+        }
+        val domain = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull()
+            ?.takeIf { it.isNotBlank() } ?: return
+        faviconCache[domain]?.let { setRecentsIcon(label, it); return }
+        Thread {
+            val bmp = runCatching {
+                val conn = java.net.URL("https://$domain/favicon.ico").openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 4000; conn.readTimeout = 4000
+                conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
+            }.getOrNull()
+            if (bmp != null) {
+                faviconCache[domain] = bmp
+                runOnUiThread { setRecentsIcon(label, bmp) }
+            }
+        }.start()
+    }
+
+    private fun setRecentsIcon(label: String, bmp: android.graphics.Bitmap) {
+        runCatching {
+            @Suppress("DEPRECATION")
+            setTaskDescription(android.app.ActivityManager.TaskDescription(label, bmp))
+        }
     }
 
     override fun onResume() {
