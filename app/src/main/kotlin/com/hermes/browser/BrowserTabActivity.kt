@@ -51,6 +51,8 @@ class BrowserTabActivity : ComponentActivity() {
     private var latestState: GeckoSession.SessionState? = null
     private var canGoBack = false
     private val faviconCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
+    private var isForeground = false
+    private var pageHasLoaded = false
 
     // Predictive-back snapshot animation.
     private var backSnapshotBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
@@ -72,6 +74,22 @@ class BrowserTabActivity : ComponentActivity() {
         runCatching {
             geckoView.capturePixels().accept({ bmp -> onDone(bmp) }, { onDone(null) })
         }.onFailure { onDone(null) }
+    }
+
+    // Ask Deck to (re)capture this tab's screenshot — but ONLY while it's actually foreground (Deck
+    // screenshots whatever is foreground, so firing this when backgrounded captures the home screen),
+    // and after a beat so GeckoView's async compositor has painted.
+    private fun scheduleDeckCapture(delayMs: Long) {
+        root.postDelayed({
+            if (isForeground) {
+                sendBroadcast(
+                    Intent("com.hermes.deck.ACTION_BROWSER_PAGE_LOADED").apply {
+                        setPackage("com.hermes.deck")
+                        putExtra("task_id", taskId)
+                    }
+                )
+            }
+        }, delayMs)
     }
 
     private val requestBrowserRole = registerForActivityResult(
@@ -208,19 +226,10 @@ class BrowserTabActivity : ComponentActivity() {
                             prevPageShot = null
                         },
                         onPageLoaded = {
+                            pageHasLoaded = true
                             // Capture this page so it's ready as the snapshot for the next back gesture.
                             captureGeckoViewAsync { bmp -> currentPageShot = bmp }
-                            // Delay Deck's screenshot trigger: GeckoView's compositor paints
-                            // asynchronously after onPageStop, so an immediate capture can be blank
-                            // (a freshly-opened tab showed no preview on its Deck card). Let it paint.
-                            root.postDelayed({
-                                sendBroadcast(
-                                    Intent("com.hermes.deck.ACTION_BROWSER_PAGE_LOADED").apply {
-                                        setPackage("com.hermes.deck")
-                                        putExtra("task_id", taskId)
-                                    }
-                                )
-                            }, 400)
+                            scheduleDeckCapture(350)
                         },
                         onNavigatingAway = {
                             // Save the current page as the "previous" preview for the next back gesture.
@@ -351,6 +360,7 @@ class BrowserTabActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        isForeground = true
         session.setActive(true)
         sendBroadcast(
             Intent("com.hermes.deck.ACTION_BROWSER_TAB_FOCUSED").apply {
@@ -358,6 +368,14 @@ class BrowserTabActivity : ComponentActivity() {
                 putExtra("task_id", taskId)
             }
         )
+        // Returning to an already-loaded tab: recapture now that it's foreground (its Deck preview
+        // may have been skipped while it was backgrounded).
+        if (pageHasLoaded) scheduleDeckCapture(250)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isForeground = false
     }
 
     override fun onStop() {
