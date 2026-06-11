@@ -1,0 +1,24 @@
+{
+  "manifest_version": 2,
+  "name": "Hermes userCSS",
+  "version": "1.0",
+  "description": "Injects per-domain user CSS supplied by the host app.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "usercss@hermes.browser"
+    }
+  },
+  "permissions": [
+    "geckoViewAddons",
+    "nativeMessaging",
+    "nativeMessagingFromContent"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ]
+}

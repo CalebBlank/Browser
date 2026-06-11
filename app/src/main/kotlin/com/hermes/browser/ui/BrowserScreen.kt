@@ -70,6 +70,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.FindInPage
@@ -144,6 +145,8 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
@@ -160,9 +163,13 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.unit.Velocity
+import com.hermes.browser.BrowserApp
 import com.hermes.browser.Favicons
+import com.hermes.browser.UserCss
 import com.hermes.browser.data.BookmarksDatabase
 import com.hermes.browser.data.HistoryDatabase
+import org.json.JSONObject
+import org.mozilla.geckoview.WebExtension
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -249,6 +256,34 @@ fun BrowserScreen(
         pendingAndroidCallback.value = null
     }
     var permPrompt by remember { mutableStateOf<PermPrompt?>(null) }
+
+    // Custom CSS: the live content-script port for THIS session (used to push edits without a reload),
+    // and the drawer toggle.
+    val cssPort = remember { mutableStateOf<WebExtension.Port?>(null) }
+    var showCssSheet by remember { mutableStateOf(false) }
+
+    // Wire the bundled usercss WebExtension's content-script messaging to THIS session. The extension
+    // installs async (BrowserApp.ensureBuiltIn), so wait for it. The content script asks for its URL's
+    // CSS; we answer from UserCss and keep the port to push live edits.
+    LaunchedEffect(session) {
+        var ext = BrowserApp.userCssExtension(context)
+        while (ext == null) { delay(100); ext = BrowserApp.userCssExtension(context) }
+        session.webExtensionController.setMessageDelegate(ext, object : WebExtension.MessageDelegate {
+            override fun onConnect(port: WebExtension.Port) {
+                cssPort.value = port
+                port.setDelegate(object : WebExtension.PortDelegate {
+                    override fun onPortMessage(message: Any, port: WebExtension.Port) {
+                        val url = (message as? JSONObject)?.optString("url").orEmpty()
+                        val css = UserCss.getCssForUrl(context, url) ?: ""
+                        port.postMessage(JSONObject().put("css", css))
+                    }
+                    override fun onDisconnect(port: WebExtension.Port) {
+                        if (cssPort.value === port) cssPort.value = null
+                    }
+                })
+            }
+        }, "browser")
+    }
 
     BackHandler(enabled = searchOpen.value) {
         searchOpen.value = false
@@ -537,6 +572,22 @@ fun BrowserScreen(
             )
         }
 
+        if (showCssSheet) {
+            val cssDomain = remember(currentUrl.value) { Favicons.keyOf(currentUrl.value) ?: "" }
+            CssSheet(
+                domain = cssDomain,
+                initialCss = remember(cssDomain) { UserCss.getCss(context, cssDomain) ?: "" },
+                onSave = { newCss ->
+                    if (cssDomain.isNotBlank()) {
+                        UserCss.setCss(context, cssDomain, newCss)
+                        // Live-apply to the current page without a reload.
+                        cssPort.value?.postMessage(JSONObject().put("css", newCss))
+                    }
+                },
+                onDismiss = { showCssSheet = false }
+            )
+        }
+
         if (contextMenuTransition.currentState || contextMenuTransition.targetState) {
             LongPressContextMenu(
                 visibleState = contextMenuTransition,
@@ -583,6 +634,7 @@ fun BrowserScreen(
             onRefreshOrStop = { if (isLoading.value) session.stop() else session.reload() },
             onNewTab = { onNewTab(currentUrl.value.ifEmpty { "https://start.duckduckgo.com" }) },
             onOpenSettings = { showSettings = true },
+            onCustomCss = { showCssSheet = true },
             isJavaScriptEnabled = javaScriptEnabled,
             onToggleJavaScript = {
                 val newValue = !javaScriptEnabled
@@ -739,6 +791,7 @@ private fun FloatingNavBar(
     onRefreshOrStop: () -> Unit,
     onNewTab: () -> Unit,
     onOpenSettings: () -> Unit = {},
+    onCustomCss: () -> Unit = {},
     isJavaScriptEnabled: Boolean = true,
     onToggleJavaScript: () -> Unit = {},
     onFocusGained: () -> Unit = {},
@@ -1008,6 +1061,11 @@ private fun FloatingNavBar(
                                     icon = Icons.Default.Code,
                                     label = if (isJavaScriptEnabled) "Disable JavaScript" else "Enable JavaScript",
                                     onClick = { onToggleJavaScript(); showMenu = false }
+                                )
+                                BrowserMenuItem(
+                                    icon = Icons.Default.Brush,
+                                    label = "Custom CSS",
+                                    onClick = { onCustomCss(); showMenu = false }
                                 )
                                 BrowserMenuItem(
                                     icon = Icons.Default.Settings,
@@ -1463,6 +1521,61 @@ private val themePresetColors = listOf(
     0xFFE91E63.toInt(), // pink
     0xFF7E57C2.toInt(), // purple
 )
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CssSheet(
+    domain: String,
+    initialCss: String,
+    onSave: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var css by remember { mutableStateOf(initialCss) }
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        windowInsets = WindowInsets(0)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("Custom CSS", style = MaterialTheme.typography.titleMedium)
+            Text(
+                domain.ifBlank { "this page" },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = css,
+                onValueChange = { css = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 200.dp),
+                placeholder = { Text("/* CSS applied to $domain */") },
+                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Spacer(Modifier.weight(1f))
+                Button(
+                    onClick = { onSave(css); onDismiss() },
+                    enabled = domain.isNotBlank()
+                ) { Text("Save") }
+            }
+        }
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
