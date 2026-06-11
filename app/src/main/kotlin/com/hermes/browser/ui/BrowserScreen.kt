@@ -130,6 +130,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
@@ -1095,11 +1097,13 @@ private fun FloatingNavBar(
                                     .padding(vertical = 8.dp, horizontal = 4.dp),
                                 verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                BrowserMenuItem(
-                                    icon = if (isLoading) Icons.Default.Stop else Icons.Default.Refresh,
-                                    label = if (isLoading) "Stop" else "Refresh",
-                                    onClick = { onRefreshOrStop(); showMenu = false }
-                                )
+                                val menuDivider = @Composable {
+                                    HorizontalDivider(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f)
+                                    )
+                                }
+                                // Section 1: tab / page actions.
                                 BrowserMenuItem(
                                     icon = Icons.Default.Add,
                                     label = "New tab",
@@ -1116,14 +1120,16 @@ private fun FloatingNavBar(
                                     onClick = { onFindInPage(); showMenu = false }
                                 )
                                 BrowserMenuItem(
-                                    icon = Icons.Default.DesktopWindows,
-                                    label = if (isDesktopSite) "Request mobile site" else "Request desktop site",
-                                    onClick = { onToggleDesktopSite(); showMenu = false }
-                                )
-                                BrowserMenuItem(
                                     icon = Icons.Default.Share,
                                     label = "Share",
                                     onClick = { onShare(); showMenu = false }
+                                )
+                                menuDivider()
+                                // Section 2: how the page renders.
+                                BrowserMenuItem(
+                                    icon = Icons.Default.DesktopWindows,
+                                    label = if (isDesktopSite) "Request mobile site" else "Request desktop site",
+                                    onClick = { onToggleDesktopSite(); showMenu = false }
                                 )
                                 BrowserMenuItem(
                                     icon = Icons.Default.Code,
@@ -1135,6 +1141,8 @@ private fun FloatingNavBar(
                                     label = "Custom CSS",
                                     onClick = { onCustomCss(); showMenu = false }
                                 )
+                                menuDivider()
+                                // Section 3: app settings.
                                 BrowserMenuItem(
                                     icon = Icons.Default.Settings,
                                     label = "Settings",
@@ -1235,6 +1243,17 @@ private fun NavBarRow(
     onCloseSearch: () -> Unit = {},
 ) {
     val fm = LocalFocusManager.current
+    var field by remember { mutableStateOf(TextFieldValue(addressText)) }
+    var selectOnNextSync by remember { mutableStateOf(false) }
+    // Mirror the external address string into the field. On focus-gain the parent swaps the shown
+    // text to the full URL — select it all so typing replaces it; otherwise keep the cursor at the end.
+    LaunchedEffect(addressText) {
+        if (field.text != addressText) {
+            val sel = if (selectOnNextSync) TextRange(0, addressText.length) else TextRange(addressText.length)
+            field = TextFieldValue(addressText, sel)
+            selectOnNextSync = false
+        }
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1252,12 +1271,16 @@ private fun NavBarRow(
             }
         }
         BasicTextField(
-            value = addressText,
-            onValueChange = onAddressTextChange,
+            value = field,
+            onValueChange = {
+                field = it
+                if (it.text != addressText) onAddressTextChange(it.text)
+            },
             modifier = Modifier
                 .weight(1f)
                 .padding(horizontal = 4.dp)
                 .onFocusChanged { state ->
+                    selectOnNextSync = state.isFocused
                     onFocusChanged(state.isFocused)
                 }
                 .onKeyEvent { event ->

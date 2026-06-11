@@ -361,7 +361,6 @@ class BrowserTabActivity : ComponentActivity() {
             val stateStr = savedInstanceState?.getString(KEY_SESSION_STATE)
                 ?: runCatching { sessionFile().takeIf { it.exists() }?.readText() }.getOrNull()
             val restored = stateStr?.let { runCatching { GeckoSession.SessionState.fromString(it) }.getOrNull() }
-            android.util.Log.i("BTAB", "restore task=$taskId fromState=${restored != null} urlFile=${urlFile().exists()} intentData=${intent.dataString}")
             if (restored != null) {
                 session.restoreState(restored)
             } else {
