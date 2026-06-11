@@ -1706,13 +1706,7 @@ private fun CssSheet(
             // each aligned to the line its color appears on. Tap a swatch to edit it.
             val cssPad = 12.dp
             var cssLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
-            val colorHits = remember(css) {
-                Regex("#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{3,4})")
-                    .findAll(css).mapNotNull { m ->
-                        val c = runCatching { android.graphics.Color.parseColor(m.value) }.getOrNull()
-                        if (c != null) Triple(m.value, c, m.range.first) else null
-                    }.toList()
-            }
+            val colorHits = remember(css) { CssColors.findAll(css) }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1773,9 +1767,14 @@ private fun CssSheet(
                 ColorPickerDialog(
                     initial = value,
                     onPick = { picked ->
-                        // Replace this token wherever it appears, but not when it's the prefix of a
-                        // longer hex (e.g. #fff inside #ffffff).
-                        css = css.replace(Regex(Regex.escape(token) + "(?![0-9a-fA-F])"), cssHex(picked))
+                        // Replace this token wherever it appears. Hex: guard against matching a prefix
+                        // of a longer hex (#fff in #ffffff). Named color: whole-word only.
+                        val pattern = when {
+                            token.startsWith("#") -> Regex.escape(token) + "(?![0-9a-fA-F])"
+                            token.startsWith("rgb", ignoreCase = true) -> Regex.escape(token)
+                            else -> "\\b" + Regex.escape(token) + "\\b"
+                        }
+                        css = css.replace(Regex(pattern, RegexOption.IGNORE_CASE), cssHex(picked))
                         editing = null
                     },
                     onDismiss = { editing = null }

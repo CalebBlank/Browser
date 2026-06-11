@@ -21,12 +21,15 @@ object AnthropicCssClient {
         prompt: String
     ): Result<String> = runCatching {
         val system = "You write CSS user-styles injected into web pages on \"$domain\". " +
-            "Output ONLY raw CSS — no markdown, no code fences, no commentary. Use robust selectors " +
-            "and add !important where needed to override the site's own styles. " +
-            "IMPORTANT: many sites paint the visible page background on a full-height wrapper/root " +
-            "element, NOT on <body>. To change the background reliably, target html, body AND common " +
-            "containers together, e.g.: html, body, #root, #__next, #app, [id*=\"app\"], " +
-            "[class*=\"app\"], [class*=\"container\"], [class*=\"wrapper\"], main { background: … }. " +
+            "Output ONLY raw CSS — no markdown, no code fences, no commentary. " +
+            "Use HEX color codes (e.g. #1e90ff), never CSS color names or rgb(), so the editor can " +
+            "show a color swatch for each. Use robust selectors and add !important where needed to " +
+            "override the site's own styles. " +
+            "To change the PAGE BACKGROUND: set the background on html and body, AND set " +
+            "`background: transparent !important` on the site's full-height root/app wrapper if one " +
+            "exists (e.g. #root, #__next, #app, [data-reactroot], main) so the new color shows " +
+            "through. Do NOT put the page background on buttons, inputs, text fields, search boxes, " +
+            "icons, cards, links, navigation bars, or toolbars — only the page itself. " +
             "When the user is refining, build on the existing CSS rather than discarding it."
         val userContent = buildString {
             if (currentCss.isNotBlank()) append("Existing CSS:\n").append(currentCss).append("\n\n")
