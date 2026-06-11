@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Read the Claude key from the same-signed Deck app for the custom-CSS AI feature. -->
+    <uses-permission android:name="com.hermes.deck.permission.READ_SETTINGS" />
+
     <!-- Requested on demand when a site asks (GeckoView PermissionDelegate). Must be declared here
          or the runtime request fails immediately. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

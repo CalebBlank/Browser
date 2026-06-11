@@ -144,10 +144,14 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
@@ -163,7 +167,9 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.unit.Velocity
+import com.hermes.browser.AnthropicCssClient
 import com.hermes.browser.BrowserApp
+import com.hermes.browser.DeckCredentials
 import com.hermes.browser.Favicons
 import com.hermes.browser.UserCss
 import com.hermes.browser.data.BookmarksDatabase
@@ -1530,7 +1536,13 @@ private fun CssSheet(
     onSave: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var css by remember { mutableStateOf(initialCss) }
+    var prompt by remember { mutableStateOf("") }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
@@ -1551,13 +1563,56 @@ private fun CssSheet(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            // AI prompt — generate/edit the CSS below from a natural-language request (Claude via Deck).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = prompt,
+                    onValueChange = { prompt = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Ask AI to restyle this site…") },
+                    enabled = !busy,
+                    maxLines = 3
+                )
+                IconButton(
+                    onClick = {
+                        val p = prompt.trim()
+                        if (p.isEmpty() || busy) return@IconButton
+                        busy = true; error = null
+                        scope.launch {
+                            val result = withContext(Dispatchers.IO) {
+                                val creds = DeckCredentials.read(context)
+                                    ?: return@withContext Result.failure<String>(
+                                        RuntimeException("No Claude key found in Deck. Set it in Deck settings.")
+                                    )
+                                AnthropicCssClient.generate(
+                                    creds.first, creds.second, domain.ifBlank { "this page" }, css, p
+                                )
+                            }
+                            busy = false
+                            result.onSuccess { css = it; prompt = "" }
+                                .onFailure { error = it.message ?: "Generation failed." }
+                        }
+                    },
+                    enabled = !busy && prompt.isNotBlank()
+                ) {
+                    if (busy) CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Default.AutoAwesome, contentDescription = "Generate CSS")
+                }
+            }
+            error?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
             OutlinedTextField(
                 value = css,
                 onValueChange = { css = it },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 200.dp),
-                placeholder = { Text("/* CSS applied to $domain */") },
+                    .heightIn(min = 180.dp),
+                placeholder = { Text("/* CSS applied to ${domain.ifBlank { "this page" }} */") },
                 textStyle = MaterialTheme.typography.bodyMedium.copy(
                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                 )
