@@ -17,7 +17,10 @@
     el.textContent = css;
   }
 
-  // A compact tree of the page's elements (tags + ids + first few classes), capped in size.
+  // A compact tree of the page's elements (tags + ids + first few classes), annotated with each
+  // element's computed background color — [rgb(...)] when it paints one, [transparent] for see-through
+  // interactive controls — so the AI knows which element paints the page background and which controls
+  // are transparent. Capped in size.
   function outline() {
     var SKIP = { SCRIPT: 1, STYLE: 1, NOSCRIPT: 1, SVG: 1, PATH: 1, LINK: 1, META: 1, BR: 1, HR: 1, IMG: 1 };
     var lines = [];
@@ -34,12 +37,24 @@
         for (var j = 0; j < el.classList.length && j < 3; j++) cls.push(el.classList[j]);
         s += "." + cls.join(".");
       }
+      try {
+        var bg = getComputedStyle(el).backgroundColor;
+        var transparent = (!bg || bg === "transparent" || bg === "rgba(0, 0, 0, 0)");
+        var t = el.tagName;
+        var interactive = (t === "BUTTON" || t === "INPUT" || t === "TEXTAREA" || t === "SELECT" ||
+                           t === "A" || el.getAttribute("role") === "button");
+        if (!transparent) s += " [" + bg + "]";
+        else if (interactive) s += " [transparent]";
+      } catch (e) {}
       lines.push(s);
       var kids = el.children || [];
       for (var k = 0; k < kids.length; k++) walk(kids[k], depth + 1);
     }
+    try {
+      lines.push("html [" + getComputedStyle(document.documentElement).backgroundColor + "]");
+    } catch (e) {}
     if (document.body) walk(document.body, 0);
-    return lines.join("\n").slice(0, 6000);
+    return lines.join("\n").slice(0, 8000);
   }
 
   try {

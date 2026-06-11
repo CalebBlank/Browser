@@ -26,13 +26,16 @@ object AnthropicCssClient {
             "Use HEX color codes (e.g. #1e90ff), never CSS color names or rgb(), so the editor can " +
             "show a color swatch for each. Use robust selectors and add !important where needed to " +
             "override the site's own styles. " +
-            "To change the PAGE BACKGROUND: set the background on html and body, AND set " +
-            "`background: transparent !important` on the site's full-height root/app wrapper if one " +
-            "exists (e.g. #root, #__next, #app, [data-reactroot], main) so the new color shows " +
-            "through. Do NOT put the page background on buttons, inputs, text fields, search boxes, " +
-            "icons, cards, links, navigation bars, or toolbars — only the page itself. " +
-            "When a page element outline is provided, use it to choose EXACT selectors and to " +
-            "include or exclude the specific elements the request implies. " +
+            "The element outline annotates each element with its computed background in brackets: " +
+            "[rgb(...)] means it paints that background, [transparent] marks a see-through control. " +
+            "To change the PAGE BACKGROUND: find the OUTERMOST element that actually paints the page " +
+            "background (the topmost one with a non-transparent [rgb(...)] background — often html, " +
+            "body, or a wrapper div) and set the new color on THAT element only. Do not blanket-paint " +
+            "many containers. Any control marked [transparent] (buttons, inputs, search boxes) would " +
+            "show the new page background straight through it — for each such control the request " +
+            "doesn't intend to recolor, add a rule giving it its own explicit solid background so it " +
+            "stays visibly separate from the page. Write exact selectors from the outline for both " +
+            "the background target and the controls to preserve. " +
             "When the user is refining, build on the existing CSS rather than discarding it."
         val userContent = buildString {
             if (pageContext.isNotBlank()) {
