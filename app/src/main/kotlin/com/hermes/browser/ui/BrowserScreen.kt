@@ -117,6 +117,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.graphics.Brush
@@ -1552,7 +1554,11 @@ private val themePresetColors = listOf(
     0xFF7E57C2.toInt(), // purple
 )
 
-private fun cssHex(color: Int): String = "#%06X".format(0xFFFFFF and color)
+private fun cssHex(color: Int): String {
+    val a = (color ushr 24) and 0xFF
+    return if (a >= 0xFF) "#%06X".format(0xFFFFFF and color)
+    else "#%06X%02X".format(0xFFFFFF and color, a)   // #rrggbbaa
+}
 
 @Composable
 private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
@@ -1560,11 +1566,21 @@ private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: ()
     var hue by remember { mutableStateOf(start[0]) }
     var sat by remember { mutableStateOf(start[1]) }
     var value by remember { mutableStateOf(start[2]) }
-    val current = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value))
+    var alpha by remember { mutableStateOf(((initial ushr 24) and 0xFF) / 255f) }
+    val rgb = android.graphics.Color.HSVToColor(floatArrayOf(hue, sat, value))
+    val current = (rgb and 0x00FFFFFF) or ((alpha * 255).toInt().coerceIn(0, 255) shl 24)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Pick a color") },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Pick a color", modifier = Modifier.weight(1f))
+                Box(
+                    Modifier.size(28.dp).clip(CircleShape).background(ComposeColor(current))
+                        .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                )
+            }
+        },
         confirmButton = { TextButton(onClick = { onPick(current) }) { Text("Apply") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
         text = {
@@ -1622,15 +1638,24 @@ private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: ()
                         drawLine(ComposeColor.White, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
                     }
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Box(
-                        Modifier.size(36.dp).clip(CircleShape).background(ComposeColor(current))
-                            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape)
-                    )
-                    Text(
-                        cssHex(current),
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                    )
+                // Opacity strip (transparent → the chosen color).
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(26.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .pointerInput(Unit) {
+                            detectTapGestures { o -> alpha = (o.x / size.width).coerceIn(0f, 1f) }
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { c, _ -> alpha = (c.position.x / size.width).coerceIn(0f, 1f) }
+                        }
+                ) {
+                    Canvas(Modifier.matchParentSize()) {
+                        drawRect(Brush.horizontalGradient(listOf(ComposeColor.Transparent, ComposeColor(rgb))))
+                        val x = alpha * size.width
+                        drawLine(ComposeColor.White, Offset(x, 0f), Offset(x, size.height), strokeWidth = 3f)
+                    }
                 }
             }
         }
@@ -1659,13 +1684,14 @@ private fun CssSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        windowInsets = WindowInsets(0)
+        windowInsets = WindowInsets.statusBars
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .imePadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1724,6 +1750,11 @@ private fun CssSheet(
             val cssPad = 12.dp
             var cssLayout by remember { mutableStateOf<TextLayoutResult?>(null) }
             val colorHits = remember(css) { CssColors.findAll(css) }
+            // Keep the swatch gutter exactly as tall as the (growing) CSS box so swatches near the
+            // bottom aren't clipped.
+            val cssBoxHeight = cssLayout?.let {
+                with(density) { (it.size.height + cssPad.toPx() * 2).toDp() }
+            }?.coerceAtLeast(180.dp) ?: 180.dp
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1757,7 +1788,7 @@ private fun CssSheet(
                     )
                 }
                 // Gutter width matches the AI row's icon button so the CSS box == AI field width.
-                Box(modifier = Modifier.width(48.dp).heightIn(min = 180.dp)) {
+                Box(modifier = Modifier.width(48.dp).height(cssBoxHeight)) {
                     val layout = cssLayout
                     if (layout != null) {
                         colorHits.forEach { (token, color, offset) ->
@@ -1832,7 +1863,7 @@ private fun SettingsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(),
-        windowInsets = WindowInsets(0)
+        windowInsets = WindowInsets.statusBars
     ) {
         Column(
             modifier = Modifier

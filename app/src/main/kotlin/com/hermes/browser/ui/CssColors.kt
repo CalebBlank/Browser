@@ -26,20 +26,25 @@ object CssColors {
 
     private fun parseHex(t: String): Int? {
         val h = t.removePrefix("#")
-        val rrggbb = when (h.length) {
-            3, 4 -> h.take(3).map { "$it$it" }.joinToString("")   // #rgb / #rgba -> rrggbb
-            6, 8 -> h.take(6)
+        // Normalize to AARRGGBB (CSS hex puts alpha LAST: #rgba / #rrggbbaa).
+        val argb = when (h.length) {
+            3 -> "FF" + h.map { "$it$it" }.joinToString("")                       // rgb
+            4 -> { val e = h.map { "$it$it" }.joinToString(""); e.substring(6) + e.substring(0, 6) } // rgba -> aarrggbb
+            6 -> "FF$h"                                                            // rrggbb
+            8 -> h.substring(6) + h.substring(0, 6)                                // rrggbbaa -> aarrggbb
             else -> return null
         }
-        return runCatching { 0xFF000000.toInt() or rrggbb.toLong(16).toInt() }.getOrNull()
+        return runCatching { argb.toLong(16).toInt() }.getOrNull()
     }
 
     private fun parseRgb(t: String): Int? {
-        val nums = Regex("\\d+").findAll(t.substringAfter('(').substringBefore(')'))
-            .map { it.value.toIntOrNull() ?: 0 }.toList()
-        if (nums.size < 3) return null
-        val r = nums[0].coerceIn(0, 255); val g = nums[1].coerceIn(0, 255); val b = nums[2].coerceIn(0, 255)
-        return 0xFF000000.toInt() or (r shl 16) or (g shl 8) or b
+        val parts = t.substringAfter('(').substringBefore(')').split(',').map { it.trim() }
+        if (parts.size < 3) return null
+        val r = parts[0].toFloatOrNull()?.toInt()?.coerceIn(0, 255) ?: return null
+        val g = parts[1].toFloatOrNull()?.toInt()?.coerceIn(0, 255) ?: return null
+        val b = parts[2].toFloatOrNull()?.toInt()?.coerceIn(0, 255) ?: return null
+        val a = if (parts.size >= 4) ((parts[3].toFloatOrNull() ?: 1f) * 255).toInt().coerceIn(0, 255) else 255
+        return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     // Common CSS named colors (opaque ARGB). Not exhaustive, but covers what people actually type.
