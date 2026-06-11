@@ -8,13 +8,13 @@
     <uses-permission android:name="android.permission.REORDER_TASKS" />
 
     <permission
-        android:name="com.hermes.browser.gecko.permission.READ_HISTORY"
+        android:name="com.hermes.browser.permission.READ_HISTORY"
         android:protectionLevel="signature" />
 
     <application
         android:name=".BrowserApp"
         android:icon="@mipmap/ic_launcher"
-        android:label="Browser Gecko"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.Browser"
         android:enableOnBackInvokedCallback="true">
@@ -69,9 +69,9 @@
 
         <provider
             android:name=".HistoryProvider"
-            android:authorities="com.hermes.browser.gecko.history"
+            android:authorities="com.hermes.browser.history"
             android:exported="true"
-            android:readPermission="com.hermes.browser.gecko.permission.READ_HISTORY" />
+            android:readPermission="com.hermes.browser.permission.READ_HISTORY" />
 
     </application>
 

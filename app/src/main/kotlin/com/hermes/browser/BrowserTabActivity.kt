@@ -64,6 +64,7 @@ class BrowserTabActivity : ComponentActivity() {
     private var isNavigatingBack = false
 
     private fun sessionFile(): File = File(filesDir, "session_$taskId.json")
+    private fun urlFile(): File = File(filesDir, "url_$taskId.txt")
 
     // Async snapshot of the live page via GeckoView's compositor. onDone(null) on any failure
     // (e.g. compositor not ready) so the back gesture still works, just without the slide.
@@ -225,7 +226,12 @@ class BrowserTabActivity : ComponentActivity() {
                         },
                         onSessionStateChanged = { latestState = it },
                         onCanGoBackChanged = { canGoBack = it },
-                        onPageInfo = { url, title -> updateTaskDescription(url, title) }
+                        onPageInfo = { url, title ->
+                            updateTaskDescription(url, title)
+                            // Persist the current URL immediately (no throttle) so a tab reopened
+                            // before onSessionStateChange fires still lands on its page, not the default.
+                            if (url.startsWith("http")) runCatching { urlFile().writeText(url) }
+                        }
                     )
                 }
             }
@@ -266,10 +272,16 @@ class BrowserTabActivity : ComponentActivity() {
             val stateStr = savedInstanceState?.getString(KEY_SESSION_STATE)
                 ?: runCatching { sessionFile().takeIf { it.exists() }?.readText() }.getOrNull()
             val restored = stateStr?.let { runCatching { GeckoSession.SessionState.fromString(it) }.getOrNull() }
+            android.util.Log.i("BTAB", "restore task=$taskId fromState=${restored != null} urlFile=${urlFile().exists()} intentData=${intent.dataString}")
             if (restored != null) {
                 session.restoreState(restored)
             } else {
-                session.loadUri(intent.dataString ?: "https://start.duckduckgo.com")
+                // No SessionState (page backgrounded before GeckoView's throttled onSessionStateChange
+                // fired). Fall back to the last URL persisted for this task so the tab reopens to its
+                // page, not the default.
+                val lastUrl = runCatching { urlFile().takeIf { it.exists() }?.readText() }.getOrNull()
+                    ?.takeIf { it.startsWith("http") }
+                session.loadUri(lastUrl ?: intent.dataString ?: "https://start.duckduckgo.com")
             }
         }
     }
@@ -334,6 +346,7 @@ class BrowserTabActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        session.setActive(true)
         sendBroadcast(
             Intent("com.hermes.deck.ACTION_BROWSER_TAB_FOCUSED").apply {
                 setPackage("com.hermes.deck")
@@ -344,6 +357,7 @@ class BrowserTabActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
+        session.setActive(false) // recommended GeckoView lifecycle; also nudges a state flush
         // Persist the latest SessionState (cached via onSessionStateChange) to disk. That callback is
         // throttled (~seconds; no on-demand saveState() in the API), so a page backgrounded within a
         // few seconds of loading may persist slightly older state. Acceptable for normal use.

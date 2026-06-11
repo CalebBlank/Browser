@@ -9,9 +9,8 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        // Distinct from the live WebView browser (com.hermes.browser) so the Gecko WIP installs
-        // ALONGSIDE it as a separate app during the migration. Reverts to com.hermes.browser at cutover.
-        applicationId = "com.hermes.browser.gecko"
+        // CUTOVER: gecko is now the real browser (replaces the WebView build, Deck-integrated).
+        applicationId = "com.hermes.browser"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
