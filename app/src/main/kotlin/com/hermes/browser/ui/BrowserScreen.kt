@@ -205,6 +205,11 @@ fun BrowserScreen(
     val isLoading = remember { mutableStateOf(false) }
     val toolbarVisible = remember { mutableStateOf(true) }
     val isAddressBarFocused = remember { mutableStateOf(false) }
+    // "Search is open" — a deliberate state that, unlike raw TextField focus, SURVIVES the keyboard
+    // being swiped down and the back gesture's focus teardown. The back handler keys off this so a
+    // back-swipe closes the search instead of falling through to page navigation. Cleared only on an
+    // explicit close, a navigation, or page interaction (scroll).
+    val searchOpen = remember { mutableStateOf(false) }
     val latestStatusBarHeight by rememberUpdatedState(statusBarHeightPx)
 
     val pageTitle = remember { mutableStateOf("") }
@@ -219,7 +224,8 @@ fun BrowserScreen(
     var isPanelOpen by remember { mutableStateOf(false) }
     var isBookmarked by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = isAddressBarFocused.value) {
+    BackHandler(enabled = searchOpen.value) {
+        searchOpen.value = false
         focusManager.clearFocus()
     }
 
@@ -347,6 +353,9 @@ fun BrowserScreen(
 
         session.scrollDelegate = object : GeckoSession.ScrollDelegate {
             override fun onScrollChanged(s: GeckoSession, scrollX: Int, scrollY: Int) {
+                // Engaging the page (scroll) ends a stranded search session (e.g. user tapped the page
+                // to dismiss the keyboard, collapsing the search but leaving searchOpen set).
+                if (searchOpen.value) searchOpen.value = false
                 if (!isAddressBarFocused.value) {
                     val delta = scrollY - lastScrollY
                     when {
@@ -465,6 +474,7 @@ fun BrowserScreen(
                 if (input.isNotBlank()) saveRecentQuery(prefs, input)
                 recentQueries = getRecentQueries(prefs)
                 session.loadUri(normalizeUrl(input))
+                searchOpen.value = false
                 focusManager.clearFocus()
             },
             isLoading = isLoading.value,
@@ -480,14 +490,22 @@ fun BrowserScreen(
             },
             onFocusGained = {
                 isAddressBarFocused.value = true
+                searchOpen.value = true
                 toolbarVisible.value = true
                 val url = currentUrl.value
                 addressBarText.value = if (simplifyUrl(url).isEmpty()) "" else url
                 recentQueries = getRecentQueries(prefs)
             },
             onFocusLost = {
+                // Note: does NOT clear searchOpen — the keyboard hiding (or the back gesture's focus
+                // teardown) must not disable the search-close back handler. searchOpen is cleared only
+                // by an explicit close, a navigation, or page scroll.
                 isAddressBarFocused.value = false
                 addressBarText.value = simplifyUrl(currentUrl.value)
+            },
+            onCloseSearch = {
+                searchOpen.value = false
+                focusManager.clearFocus()
             },
             onFindInPage = { showFindBar = true },
             isDesktopSite = requestDesktop,
@@ -518,6 +536,7 @@ fun BrowserScreen(
                 if (input.isNotBlank()) saveRecentQuery(prefs, input)
                 recentQueries = getRecentQueries(prefs)
                 session.loadUri(normalizeUrl(input))
+                searchOpen.value = false
                 focusManager.clearFocus()
             },
             isBookmarked = isBookmarked,
@@ -636,6 +655,7 @@ private fun FloatingNavBar(
     onOpenPanel: () -> Unit = {},
     onClosePanel: () -> Unit = {},
     onPanelNavigate: (String) -> Unit = {},
+    onCloseSearch: () -> Unit = {},
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var isFocused by remember { mutableStateOf(false) }
@@ -814,12 +834,13 @@ private fun FloatingNavBar(
         ) {
             if (menuTransition.currentState || menuTransition.targetState) {
                 val rowHeightPx = with(density) { 56.dp.toPx() }
+                val menuGapPx = with(density) { 8.dp.toPx() }
                 Popup(
                     alignment = if (isExpanded && !isPanelOpen) Alignment.TopStart else Alignment.BottomStart,
                     offset = when {
-                        isExpanded && !isPanelOpen -> IntOffset(0, rowHeightPx.roundToInt())
-                        isPanelOpen               -> IntOffset(0, -rowHeightPx.roundToInt())
-                        else                      -> IntOffset(0, -renderedHeight.roundToInt())
+                        isExpanded && !isPanelOpen -> IntOffset(0, (rowHeightPx + menuGapPx).roundToInt())
+                        isPanelOpen               -> IntOffset(0, -(rowHeightPx + menuGapPx).roundToInt())
+                        else                      -> IntOffset(0, -(renderedHeight + menuGapPx).roundToInt())
                     },
                     onDismissRequest = { showMenu = false },
                     properties = PopupProperties(focusable = true)
@@ -929,6 +950,7 @@ private fun FloatingNavBar(
                                 else if (!focused && isFocused) onFocusLost()
                                 isFocused = focused
                             },
+                            onCloseSearch = onCloseSearch,
                         )
                         if (hasSuggestions && !isPanelOpen) {
                             Column(modifier = Modifier.padding(bottom = 8.dp)) {
@@ -982,6 +1004,7 @@ private fun NavBarRow(
     onNavigate: () -> Unit,
     isFocused: Boolean,
     onFocusChanged: (Boolean) -> Unit,
+    onCloseSearch: () -> Unit = {},
 ) {
     val fm = LocalFocusManager.current
     Row(
@@ -992,7 +1015,7 @@ private fun NavBarRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (isFocused) {
-            IconButton(onClick = { fm.clearFocus() }) {
+            IconButton(onClick = onCloseSearch) {
                 Icon(Icons.Default.ArrowBack, contentDescription = "Close search")
             }
         } else {
@@ -1037,7 +1060,7 @@ private fun NavBarRow(
         )
         if (isFocused) {
             IconButton(onClick = {
-                if (addressText.isEmpty()) fm.clearFocus()
+                if (addressText.isEmpty()) onCloseSearch()
                 else onAddressTextChange("")
             }) {
                 Icon(Icons.Default.Close, contentDescription = "Clear")
