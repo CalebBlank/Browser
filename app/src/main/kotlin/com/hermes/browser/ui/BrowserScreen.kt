@@ -99,6 +99,8 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetState
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -285,11 +287,16 @@ fun BrowserScreen(
     val cssContext = remember { mutableStateOf("") }
 
     // A bottom sheet's scrim (separate window) doesn't reach the status-bar strip, so we dim it here
-    // with the same scrim color, fading in/out (animated) with the sheet rather than snapping.
-    val anySheetOpen = showSettings || showCssSheet
+    // with the same scrim color. Hoist the sheet states and mirror the M3 scrim EXACTLY: it's
+    // visible while the open sheet's target isn't Hidden — so the status-bar dim fades in lockstep,
+    // including mid-drag when the dismiss threshold is crossed.
+    val cssSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sheetScrimColor = BottomSheetDefaults.ScrimColor
+    val scrimVisible = (showSettings && settingsSheetState.targetValue != SheetValue.Hidden) ||
+        (showCssSheet && cssSheetState.targetValue != SheetValue.Hidden)
     val statusScrimAlpha by animateFloatAsState(
-        targetValue = if (anySheetOpen) 1f else 0f,
+        targetValue = if (scrimVisible) 1f else 0f,
         animationSpec = tween(),
         label = "statusScrim"
     )
@@ -594,6 +601,7 @@ fun BrowserScreen(
 
         if (showSettings) {
             SettingsSheet(
+                sheetState = settingsSheetState,
                 transparent = statusBarTransparent,
                 onTransparentChange = { newValue ->
                     statusBarTransparent = newValue
@@ -625,6 +633,7 @@ fun BrowserScreen(
             val cssDomain = remember(currentUrl.value) { Favicons.keyOf(currentUrl.value) ?: "" }
             CssSheet(
                 domain = cssDomain,
+                sheetState = cssSheetState,
                 initialCss = remember(cssDomain) { UserCss.getCss(context, cssDomain) ?: "" },
                 pageContext = cssContext.value,
                 onSave = { newCss ->
@@ -1693,6 +1702,7 @@ private fun ColorPickerDialog(initial: Int, onPick: (Int) -> Unit, onDismiss: ()
 @Composable
 private fun CssSheet(
     domain: String,
+    sheetState: SheetState,
     initialCss: String,
     pageContext: String = "",
     onSave: (String) -> Unit,
@@ -1710,7 +1720,7 @@ private fun CssSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetState,
         windowInsets = WindowInsets.statusBars
     ) {
         Column(
@@ -1877,6 +1887,7 @@ private fun CssSheet(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsSheet(
+    sheetState: SheetState,
     transparent: Boolean,
     onTransparentChange: (Boolean) -> Unit,
     onSetDefaultBrowser: () -> Unit,
@@ -1889,7 +1900,7 @@ private fun SettingsSheet(
 ) {
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetState,
         windowInsets = WindowInsets.statusBars
     ) {
         Column(
