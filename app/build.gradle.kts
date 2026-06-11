@@ -58,6 +58,9 @@ dependencies {
     // GeckoView (Firefox engine) — replaces system WebView. See GECKO_MIGRATION_PLAN.md.
     implementation("org.mozilla.geckoview:geckoview:151.0.20260608154138")
 
+    // Pull-to-refresh: wraps the GeckoView; gated to the top of the page via the ScrollDelegate.
+    implementation("androidx.swiperefreshlayout:swiperefreshlayout:1.1.0")
+
     // Phase 5 favicon-color theming: Palette extracts the favicon's dominant color, material-kolor
     // seeds the whole M3 scheme from it (search bar, popup menu, panels all tint harmoniously).
     implementation("androidx.palette:palette-ktx:1.0.0")

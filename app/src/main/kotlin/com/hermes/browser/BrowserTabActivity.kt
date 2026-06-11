@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
 import com.hermes.browser.ui.BrowserScreen
 import com.hermes.browser.ui.BrowserTheme
 import org.mozilla.geckoview.GeckoSession
@@ -43,6 +44,10 @@ class BrowserTabActivity : ComponentActivity() {
     private lateinit var session: GeckoSession
     private lateinit var geckoView: GeckoView
     private lateinit var root: FrameLayout
+    private lateinit var swipeRefresh: SwipeRefreshLayout
+    // Latest page scroll offset, fed by BrowserScreen's ScrollDelegate; pull-to-refresh is only
+    // allowed at the very top (scrollY == 0).
+    private var pageScrollY = 0
     private var statusBarBgView: View? = null
     private var statusBarHeightPx by mutableStateOf(0)
     private var statusBarTransparent = true
@@ -221,6 +226,15 @@ class BrowserTabActivity : ComponentActivity() {
         geckoView = GeckoView(this)
         geckoView.setSession(session)
 
+        // Pull-to-refresh: wrap the GeckoView. The pull is only honored at the top of the page —
+        // setOnChildScrollUpCallback returns "can still scroll up" (true) whenever scrollY > 0, which
+        // tells SwipeRefreshLayout NOT to start the gesture mid-page.
+        swipeRefresh = SwipeRefreshLayout(this).apply {
+            addView(geckoView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            setOnChildScrollUpCallback { _, _ -> pageScrollY > 0 }
+            setOnRefreshListener { session.reload() }
+        }
+
         val statusBarBg = View(this).also { statusBarBgView = it }
 
         statusBarTransparent = getSharedPreferences("browser_prefs", MODE_PRIVATE)
@@ -258,6 +272,7 @@ class BrowserTabActivity : ComponentActivity() {
                         },
                         onPageLoaded = {
                             pageHasLoaded = true
+                            swipeRefresh.isRefreshing = false
                             // Capture this page so it's ready as the snapshot for the next back gesture.
                             captureGeckoViewAsync { bmp -> currentPageShot = bmp }
                             scheduleDeckCapture(350)
@@ -276,14 +291,15 @@ class BrowserTabActivity : ComponentActivity() {
                             // Persist the current URL immediately (no throttle) so a tab reopened
                             // before onSessionStateChange fires still lands on its page, not the default.
                             if (url.startsWith("http")) runCatching { urlFile().writeText(url) }
-                        }
+                        },
+                        onPageScroll = { pageScrollY = it }
                     )
                 }
             }
         }
 
         root = FrameLayout(this)
-        root.addView(geckoView, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(swipeRefresh, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
         val sbParams = FrameLayout.LayoutParams(MATCH_PARENT, 0).apply { gravity = Gravity.TOP }
         root.addView(statusBarBg, sbParams)
@@ -333,9 +349,10 @@ class BrowserTabActivity : ComponentActivity() {
 
     private fun applyGeckoViewMargin() {
         val margin = if (statusBarTransparent) 0 else statusBarHeightPx
-        (geckoView.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+        // The GeckoView is now wrapped by swipeRefresh; push the wrapper so both move together.
+        (swipeRefresh.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
             params.topMargin = margin
-            geckoView.requestLayout()
+            swipeRefresh.requestLayout()
         }
     }
 

@@ -186,7 +186,8 @@ fun BrowserScreen(
     onNavigatingAway: () -> Unit = {},
     onSessionStateChanged: (GeckoSession.SessionState) -> Unit = {},
     onCanGoBackChanged: (Boolean) -> Unit = {},
-    onPageInfo: (url: String, title: String) -> Unit = { _, _ -> }
+    onPageInfo: (url: String, title: String) -> Unit = { _, _ -> },
+    onPageScroll: (Int) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -353,6 +354,8 @@ fun BrowserScreen(
 
         session.scrollDelegate = object : GeckoSession.ScrollDelegate {
             override fun onScrollChanged(s: GeckoSession, scrollX: Int, scrollY: Int) {
+                // Drives pull-to-refresh gating (only at the very top of the page).
+                onPageScroll(scrollY)
                 // Engaging the page (scroll) ends a stranded search session (e.g. user tapped the page
                 // to dismiss the keyboard, collapsing the search but leaving searchOpen set).
                 if (searchOpen.value) searchOpen.value = false
