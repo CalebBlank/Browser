@@ -21,6 +21,7 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -36,7 +37,6 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.graphics.Color as ComposeColor
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
@@ -61,6 +61,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -224,8 +225,7 @@ fun BrowserScreen(
     onSelectThemeWebsite: () -> Unit = {},
     onSelectThemeSystem: () -> Unit = {},
     onSelectThemeColor: (Int) -> Unit = {},
-    onRequestRecolor: () -> Unit = {},
-    onSheetScrim: (open: Boolean, scrimArgb: Int) -> Unit = { _, _ -> }
+    onRequestRecolor: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -284,11 +284,15 @@ fun BrowserScreen(
     // Latest page element outline (from the content script) — fed to the AI for precise selectors.
     val cssContext = remember { mutableStateOf("") }
 
-    // When a bottom sheet is open its scrim doesn't reach the status bar (separate window), so ask
-    // the activity to dim the status-bar strip with the same scrim color for a continuous look.
-    val sheetScrimArgb = BottomSheetDefaults.ScrimColor.toArgb()
+    // A bottom sheet's scrim (separate window) doesn't reach the status-bar strip, so we dim it here
+    // with the same scrim color, fading in/out (animated) with the sheet rather than snapping.
     val anySheetOpen = showSettings || showCssSheet
-    LaunchedEffect(anySheetOpen) { onSheetScrim(anySheetOpen, sheetScrimArgb) }
+    val sheetScrimColor = BottomSheetDefaults.ScrimColor
+    val statusScrimAlpha by animateFloatAsState(
+        targetValue = if (anySheetOpen) 1f else 0f,
+        animationSpec = tween(),
+        label = "statusScrim"
+    )
 
     // Wire the bundled usercss WebExtension's content-script messaging to THIS session. The extension
     // installs async (BrowserApp.ensureBuiltIn), so wait for it. The content script asks for its URL's
@@ -573,6 +577,18 @@ fun BrowserScreen(
                     findTotalMatches = 0
                     session.finder.clear()
                 }
+            )
+        }
+
+        // Status-bar dim, fading in/out with any open sheet (the sheet's own scrim, in a separate
+        // window, can't reach this strip).
+        if (statusScrimAlpha > 0f) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .windowInsetsTopHeight(WindowInsets.statusBars)
+                    .background(sheetScrimColor.copy(alpha = sheetScrimColor.alpha * statusScrimAlpha))
             )
         }
 
@@ -1695,11 +1711,12 @@ private fun CssSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        windowInsets = WindowInsets.systemBars
+        windowInsets = WindowInsets.statusBars
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
@@ -1873,11 +1890,12 @@ private fun SettingsSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        windowInsets = WindowInsets.systemBars
+        windowInsets = WindowInsets.statusBars
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
