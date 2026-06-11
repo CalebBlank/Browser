@@ -226,7 +226,7 @@ fun BrowserScreen(
         findQuery = ""
         findActiveMatch = 0
         findTotalMatches = 0
-        // TODO(Phase 4): session.finder.clear()
+        session.finder.clear()
     }
 
     val contextMenuTransition = remember { MutableTransitionState(false) }
@@ -297,11 +297,47 @@ fun BrowserScreen(
                 onNewTab(uri)
                 return GeckoResult.fromValue(null)
             }
+
+            override fun onLoadRequest(
+                s: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest
+            ): GeckoResult<org.mozilla.geckoview.AllowOrDeny>? {
+                // Hand non-web schemes (mailto:, tel:, intent:, market:, ...) to the system.
+                val scheme = android.net.Uri.parse(request.uri).scheme?.lowercase()
+                if (scheme != null && scheme !in setOf("http", "https", "about", "data", "blob", "javascript")) {
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(request.uri))
+                                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        )
+                    }
+                    return GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.DENY)
+                }
+                return GeckoResult.fromValue(org.mozilla.geckoview.AllowOrDeny.ALLOW)
+            }
         }
 
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(s: GeckoSession, title: String?) {
                 pageTitle.value = title ?: ""
+            }
+
+            override fun onContextMenu(
+                s: GeckoSession, screenX: Int, screenY: Int,
+                element: GeckoSession.ContentDelegate.ContextElement
+            ) {
+                val link = element.linkUri
+                val img = if (element.type == GeckoSession.ContentDelegate.ContextElement.TYPE_IMAGE) element.srcUri else null
+                if (link == null && img == null) return
+                contextMenuLinkUrl = link
+                contextMenuImageUrl = img
+                contextMenuX = screenX
+                contextMenuY = screenY
+                contextMenuTransition.targetState = true
+            }
+
+            override fun onExternalResponse(s: GeckoSession, response: org.mozilla.geckoview.WebResponse) {
+                downloadWebResponse(context, response)
             }
         }
 
@@ -344,14 +380,30 @@ fun BrowserScreen(
                 query = findQuery,
                 activeMatch = findActiveMatch,
                 totalMatches = findTotalMatches,
-                onQueryChange = { q -> findQuery = q /* TODO(Phase 4): session.finder.find */ },
-                onNext = { /* TODO(Phase 4) */ },
-                onPrevious = { /* TODO(Phase 4) */ },
+                onQueryChange = { q ->
+                    findQuery = q
+                    if (q.isNotEmpty()) {
+                        session.finder.find(q, 0).accept { r ->
+                            if (r != null) { findActiveMatch = r.current; findTotalMatches = r.total }
+                        }
+                    } else session.finder.clear()
+                },
+                onNext = {
+                    session.finder.find(null, GeckoSession.FINDER_FIND_FORWARD).accept { r ->
+                        if (r != null) { findActiveMatch = r.current; findTotalMatches = r.total }
+                    }
+                },
+                onPrevious = {
+                    session.finder.find(null, GeckoSession.FINDER_FIND_BACKWARDS).accept { r ->
+                        if (r != null) { findActiveMatch = r.current; findTotalMatches = r.total }
+                    }
+                },
                 onClose = {
                     showFindBar = false
                     findQuery = ""
                     findActiveMatch = 0
                     findTotalMatches = 0
+                    session.finder.clear()
                 }
             )
         }
@@ -1477,6 +1529,34 @@ private fun normalizeUrl(input: String): String {
         trimmed.contains(".") && !trimmed.contains(" ") -> "https://$trimmed"
         else -> "https://duckduckgo.com/?q=${Uri.encode(trimmed)}"
     }
+}
+
+// Stream a GeckoView external response (download) to the Downloads collection. The WebResponse body
+// is already authenticated by the engine, so unlike the old WebView path there's no cookie dance.
+private fun downloadWebResponse(context: Context, response: org.mozilla.geckoview.WebResponse) {
+    val body = response.body ?: return
+    val cd = response.headers["Content-Disposition"]
+    val mime = response.headers["Content-Type"]
+    val fileName = android.webkit.URLUtil.guessFileName(response.uri, cd, mime)
+    Thread {
+        val ok = runCatching {
+            val resolver = context.contentResolver
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Downloads.DISPLAY_NAME, fileName)
+                if (!mime.isNullOrBlank()) put(android.provider.MediaStore.Downloads.MIME_TYPE, mime.substringBefore(';').trim())
+            }
+            val uri = resolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: error("no download uri")
+            resolver.openOutputStream(uri)?.use { out -> body.use { it.copyTo(out) } }
+        }.isSuccess
+        android.os.Handler(android.os.Looper.getMainLooper()).post {
+            android.widget.Toast.makeText(
+                context,
+                if (ok) "Downloaded $fileName" else "Download failed",
+                android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }.start()
 }
 
 private fun parseRgbColor(jsValue: String): Int? {
