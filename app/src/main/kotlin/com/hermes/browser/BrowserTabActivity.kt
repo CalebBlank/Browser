@@ -71,6 +71,7 @@ class BrowserTabActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        android.util.Log.i("BTAB", "onCreate task=$taskId saved=${savedInstanceState != null} intentData=${intent.dataString}")
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
@@ -118,7 +119,7 @@ class BrowserTabActivity : ComponentActivity() {
                                 }
                             )
                         },
-                        onSessionStateChanged = { latestState = it },
+                        onSessionStateChanged = { latestState = it; android.util.Log.i("BTAB", "stateChange task=$taskId len=${it.toString().length}") },
                         onCanGoBackChanged = { canGoBack = it }
                     )
                 }
@@ -162,6 +163,7 @@ class BrowserTabActivity : ComponentActivity() {
             val stateStr = savedInstanceState?.getString(KEY_SESSION_STATE)
                 ?: runCatching { sessionFile().takeIf { it.exists() }?.readText() }.getOrNull()
             val restored = stateStr?.let { runCatching { GeckoSession.SessionState.fromString(it) }.getOrNull() }
+            android.util.Log.i("BTAB", "restore task=$taskId file=${sessionFile().name} exists=${sessionFile().exists()} stateLen=${stateStr?.length} restored=${restored != null}")
             if (restored != null) {
                 session.restoreState(restored)
             } else {
@@ -208,8 +210,10 @@ class BrowserTabActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        // Persist synchronously to disk (the latest SessionState was cached via onSessionStateChange;
-        // saveState() is async and could lose a race against the OS reaping the task).
+        // Persist the latest SessionState (cached via onSessionStateChange) to disk. GeckoView only
+        // PUSHES state via that callback and throttles it (~seconds; no on-demand saveState() in the
+        // API), so a page backgrounded within a few seconds of loading may persist slightly older
+        // state. Acceptable — normal use (navigating/reading) keeps it current.
         latestState?.let { runCatching { sessionFile().writeText(it.toString()) } }
     }
 
