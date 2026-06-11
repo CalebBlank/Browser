@@ -54,6 +54,11 @@ class BrowserTabActivity : ComponentActivity() {
     private var isForeground = false
     private var pageHasLoaded = false
 
+    // Phase 5 favicon-color theming: the favicon's dominant color seeds the whole M3 scheme
+    // (search bar, popup menu, panels all tint). Null until a favicon is decoded → system/dynamic.
+    private var seedColor by mutableStateOf<Int?>(null)
+    private val accentCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+
     // Predictive-back snapshot animation.
     private var backSnapshotBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
     private var backAnimProgress by mutableStateOf(0f)
@@ -222,7 +227,7 @@ class BrowserTabActivity : ComponentActivity() {
         val composeView = ComposeView(this).apply {
             setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
             setContent {
-                BrowserTheme {
+                BrowserTheme(seedColor = seedColor) {
                     BrowserScreen(
                         session = session,
                         statusBarHeightPx = statusBarHeightPx,
@@ -361,6 +366,7 @@ class BrowserTabActivity : ComponentActivity() {
         }
         val domain = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull()
             ?.takeIf { it.isNotBlank() } ?: return
+        accentCache[domain]?.let { seedColor = it }
         faviconCache[domain]?.let { setRecentsIcon(label, it); return }
         Thread {
             val bmp = runCatching {
@@ -370,10 +376,27 @@ class BrowserTabActivity : ComponentActivity() {
             }.getOrNull()
             if (bmp != null) {
                 faviconCache[domain] = bmp
-                runOnUiThread { setRecentsIcon(label, bmp) }
+                val accent = extractAccent(bmp)
+                if (accent != null) accentCache[domain] = accent
+                runOnUiThread {
+                    setRecentsIcon(label, bmp)
+                    if (accent != null) seedColor = accent
+                }
             }
         }.start()
     }
+
+    // Pick a seed color from the favicon: prefer a vibrant swatch, fall back to the dominant one.
+    // Skip near-grayscale results so a plain black/white favicon doesn't wash the whole UI gray.
+    private fun extractAccent(bmp: android.graphics.Bitmap): Int? = runCatching {
+        val palette = androidx.palette.graphics.Palette.from(bmp).generate()
+        val swatch = palette.vibrantSwatch
+            ?: palette.lightVibrantSwatch
+            ?: palette.darkVibrantSwatch
+            ?: palette.mutedSwatch
+            ?: palette.dominantSwatch
+        swatch?.rgb
+    }.getOrNull()
 
     private fun setRecentsIcon(label: String, bmp: android.graphics.Bitmap) {
         runCatching {

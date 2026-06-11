@@ -57,4 +57,9 @@ dependencies {
 
     // GeckoView (Firefox engine) — replaces system WebView. See GECKO_MIGRATION_PLAN.md.
     implementation("org.mozilla.geckoview:geckoview:151.0.20260608154138")
+
+    // Phase 5 favicon-color theming: Palette extracts the favicon's dominant color, material-kolor
+    // seeds the whole M3 scheme from it (search bar, popup menu, panels all tint harmoniously).
+    implementation("androidx.palette:palette-ktx:1.0.0")
+    implementation("com.materialkolor:material-kolor:1.4.4")
 }
