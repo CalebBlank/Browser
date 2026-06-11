@@ -320,7 +320,8 @@ class BrowserTabActivity : ComponentActivity() {
                         onSelectThemeWebsite = { setThemeMode("website") },
                         onSelectThemeSystem = { setThemeMode("system") },
                         onSelectThemeColor = { c -> setThemeMode("fixed", c) },
-                        onRequestRecolor = { resampleStatusBar() }
+                        onRequestRecolor = { resampleStatusBar() },
+                        onSheetScrim = { open, argb -> setStatusBarScrim(open, argb) }
                     )
                 }
             }
@@ -391,6 +392,13 @@ class BrowserTabActivity : ComponentActivity() {
             putString("theme_mode", mode)
             if (color != null) putInt("theme_fixed_color", color)
         }.apply()
+    }
+
+    // A bottom sheet's scrim (separate window) doesn't dim the status-bar strip we draw, so overlay
+    // the same scrim color on it while a sheet is open for a continuous dim.
+    private fun setStatusBarScrim(dim: Boolean, scrimArgb: Int) {
+        statusBarBgView?.foreground =
+            if (dim) android.graphics.drawable.ColorDrawable(scrimArgb) else null
     }
 
     private fun updateStatusBarColor(color: Int, transparent: Boolean) {
