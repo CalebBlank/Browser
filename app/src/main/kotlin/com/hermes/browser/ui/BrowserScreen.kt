@@ -163,10 +163,13 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSessionSettings
 
 @Composable
 fun BrowserScreen(
-    webView: WebView,
+    session: GeckoSession,
     statusBarHeightPx: Int,
     onNewTab: (String) -> Unit,
     onPageBackgroundColor: (color: Int, transparent: Boolean) -> Unit = { _, _ -> },
@@ -179,7 +182,9 @@ fun BrowserScreen(
     showBackOverlay: Boolean = false,
     onBackOverlayDismiss: () -> Unit = {},
     onPageLoaded: () -> Unit = {},
-    onNavigatingAway: () -> Unit = {}
+    onNavigatingAway: () -> Unit = {},
+    onSessionStateChanged: (GeckoSession.SessionState) -> Unit = {},
+    onCanGoBackChanged: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("browser_prefs", Context.MODE_PRIVATE) }
@@ -200,7 +205,7 @@ fun BrowserScreen(
     val isAddressBarFocused = remember { mutableStateOf(false) }
     val latestStatusBarHeight by rememberUpdatedState(statusBarHeightPx)
 
-    val mobileUserAgent = remember { webView.settings.userAgentString }
+    val pageTitle = remember { mutableStateOf("") }
     var requestDesktop by remember { mutableStateOf(false) }
 
     var showFindBar by remember { mutableStateOf(false) }
@@ -221,12 +226,7 @@ fun BrowserScreen(
         findQuery = ""
         findActiveMatch = 0
         findTotalMatches = 0
-        webView.clearMatches()
-    }
-
-    // Block WebView touch interaction while find-in-page is open.
-    LaunchedEffect(showFindBar) {
-        webView.isEnabled = !showFindBar
+        // TODO(Phase 4): session.finder.clear()
     }
 
     val contextMenuTransition = remember { MutableTransitionState(false) }
@@ -258,257 +258,71 @@ fun BrowserScreen(
         }
     }
 
-    DisposableEffect(webView) {
-        // Tracks whether onPageStarted fired for a new page while the back overlay was active.
-        // Prevents a spurious onPageFinished for the current page from clearing the overlay early.
-        var backOverlayNavigating = false
+    DisposableEffect(session) {
+        var lastScrollY = 0
 
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        session.progressDelegate = object : GeckoSession.ProgressDelegate {
+            override fun onPageStart(s: GeckoSession, url: String) {
                 latestOnNavigatingAway()
                 isLoading.value = true
-                currentUrl.value = url ?: ""
-                if (!isAddressBarFocused.value) addressBarText.value = simplifyUrl(url ?: "")
-                if (latestShowBackOverlay) backOverlayNavigating = true
+                currentUrl.value = url
+                if (!isAddressBarFocused.value) addressBarText.value = simplifyUrl(url)
             }
 
-            // Fires on first paint of the page — including back/forward-cache restores from
-            // goBack() that skip onPageStarted/onPageFinished entirely. Without this, the
-            // dark back overlay would linger over the already-restored page (grey screen).
-            override fun onPageCommitVisible(view: WebView, url: String?) {
-                currentUrl.value = url ?: currentUrl.value
-                if (latestShowBackOverlay) {
-                    backOverlayNavigating = false
-                    latestOnBackOverlayDismiss()
-                }
-            }
-
-            override fun onPageFinished(view: WebView, url: String?) {
+            override fun onPageStop(s: GeckoSession, success: Boolean) {
                 isLoading.value = false
-                currentUrl.value = url ?: ""
-                if (backOverlayNavigating) {
-                    backOverlayNavigating = false
-                    latestOnBackOverlayDismiss()
-                }
-                if (!isAddressBarFocused.value) addressBarText.value = simplifyUrl(url ?: "")
-
-                // Inject spacer at top of page that scrolls with content
-                val density = view.context.resources.displayMetrics.density
-                val cssHeight = if (latestTransparent) latestStatusBarHeight / density else 0f
-                view.evaluateJavascript("""
-                    (function() {
-                        if (!document.body) return;
-                        var el = document.getElementById('__hermes_spacer');
-                        if (!el) {
-                            el = document.createElement('div');
-                            el.id = '__hermes_spacer';
-                            el.style.pointerEvents = 'none';
-                            document.body.insertBefore(el, document.body.firstChild);
-                        }
-                        el.style.height = '${cssHeight}px';
-                        el.style.display = 'block';
-                        el.style.flexShrink = '0';
-                    })()
-                """.trimIndent(), null)
-
-                view.evaluateJavascript("""
-                    (function() {
-                        if (window.__hermesBridgeInstalled) return;
-                        window.__hermesBridgeInstalled = true;
-                        var last = 0;
-                        function report() {
-                            var y = window.scrollY || 0;
-                            if (Math.abs(y - last) >= 5 && window.HermesBridge) {
-                                window.HermesBridge.onScroll(y);
-                                last = y;
-                            }
-                        }
-                        window.addEventListener('scroll', report, { passive: true });
-                        document.addEventListener('scroll', report, { passive: true });
-                    })()
-                """.trimIndent(), null)
-
-                view.evaluateJavascript(
-                    "(function(){" +
-                    "var bg=getComputedStyle(document.body).backgroundColor;" +
-                    "if(!bg||bg==='rgba(0, 0, 0, 0)'||bg==='transparent')" +
-                    "  bg=getComputedStyle(document.documentElement).backgroundColor;" +
-                    "return bg;})()"
-                ) { value ->
-                    parseRgbColor(value)?.let { color ->
-                        lastKnownColor.value = color
-                        onPageBackgroundColor(color, latestTransparent)
-                    }
-                }
                 latestOnPageLoaded()
-                if (url != null && !url.startsWith("about:") && !url.startsWith("data:")) {
-                    com.hermes.browser.data.HistoryDatabase.get(view.context)
-                        .record(url, view.title ?: url)
+                val url = currentUrl.value
+                if (url.isNotEmpty() && !url.startsWith("about:") && !url.startsWith("data:")) {
+                    HistoryDatabase.get(context).record(url, pageTitle.value.ifEmpty { url })
                 }
             }
 
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                return false
+            override fun onProgressChange(s: GeckoSession, progress: Int) {
+                if (progress >= 100) isLoading.value = false
+            }
+
+            override fun onSessionStateChange(s: GeckoSession, sessionState: GeckoSession.SessionState) {
+                onSessionStateChanged(sessionState)
             }
         }
 
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onProgressChanged(view: WebView, newProgress: Int) {
-                if (newProgress == 100) isLoading.value = false
+        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
+            override fun onCanGoBack(s: GeckoSession, canGoBack: Boolean) {
+                onCanGoBackChanged(canGoBack)
             }
 
-            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-                if (!isUserGesture) return false
-                val helper = WebView(view.context).apply {
-                    settings.javaScriptEnabled = true
-                }
-                helper.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                        onNewTab(request.url.toString())
-                        helper.destroy()
-                        return true
+            override fun onNewSession(s: GeckoSession, uri: String): GeckoResult<GeckoSession>? {
+                // New tab = new Activity (NEW_DOCUMENT|MULTIPLE_TASK), not a child session here.
+                onNewTab(uri)
+                return GeckoResult.fromValue(null)
+            }
+        }
+
+        session.contentDelegate = object : GeckoSession.ContentDelegate {
+            override fun onTitleChange(s: GeckoSession, title: String?) {
+                pageTitle.value = title ?: ""
+            }
+        }
+
+        session.scrollDelegate = object : GeckoSession.ScrollDelegate {
+            override fun onScrollChanged(s: GeckoSession, scrollX: Int, scrollY: Int) {
+                if (!isAddressBarFocused.value) {
+                    val delta = scrollY - lastScrollY
+                    when {
+                        delta > 20 && scrollY > 150 -> toolbarVisible.value = false
+                        delta < -20 || scrollY < 50 -> toolbarVisible.value = true
                     }
+                    lastScrollY = scrollY
                 }
-                (resultMsg.obj as WebView.WebViewTransport).webView = helper
-                resultMsg.sendToTarget()
-                return true
-            }
-        }
-
-        val jsBridge = object : Any() {
-            private var lastScrollY = 0
-
-            @android.webkit.JavascriptInterface
-            fun onScroll(y: Int) {
-                webView.post {
-                    if (!isAddressBarFocused.value) {
-                        val delta = y - lastScrollY
-                        when {
-                            delta > 20 && y > 150 -> toolbarVisible.value = false
-                            delta < -20 || y < 50  -> toolbarVisible.value = true
-                        }
-                        lastScrollY = y
-                    }
-                }
-            }
-        }
-        webView.addJavascriptInterface(jsBridge, "HermesBridge")
-
-        var lastScrollY = 0
-        var pageScrolledThisGesture = false
-        webView.setOnScrollChangeListener(View.OnScrollChangeListener { _, _, scrollY, _, _ ->
-            if (!isAddressBarFocused.value) {
-                val delta = scrollY - lastScrollY
-                when {
-                    delta > 20 && scrollY > 150 -> toolbarVisible.value = false
-                    delta < -20 || scrollY < 50  -> toolbarVisible.value = true
-                }
-                lastScrollY = scrollY
-                pageScrolledThisGesture = true
-            }
-        })
-
-        webView.setFindListener { activeMatch, numberOfMatches, _ ->
-            findActiveMatch = activeMatch + 1
-            findTotalMatches = numberOfMatches
-        }
-
-        // Detect swipe gestures on non-scrollable pages so toolbar still hides/shows.
-        val gestureDetector = android.view.GestureDetector(
-            webView.context,
-            object : android.view.GestureDetector.SimpleOnGestureListener() {
-                override fun onScroll(
-                    e1: android.view.MotionEvent?,
-                    e2: android.view.MotionEvent,
-                    distanceX: Float,
-                    distanceY: Float
-                ): Boolean {
-                    if (!isAddressBarFocused.value && !pageScrolledThisGesture) {
-                        when {
-                            distanceY > 20f  -> toolbarVisible.value = false
-                            distanceY < -20f -> toolbarVisible.value = true
-                        }
-                    }
-                    return false
-                }
-            }
-        )
-
-        var lastTouchRawX = 0f
-        var lastTouchRawY = 0f
-        webView.setOnTouchListener { _, event ->
-            if (event.action == android.view.MotionEvent.ACTION_DOWN) {
-                lastTouchRawX = event.rawX
-                lastTouchRawY = event.rawY
-                pageScrolledThisGesture = false
-            }
-            gestureDetector.onTouchEvent(event)
-            false
-        }
-
-        webView.setOnLongClickListener {
-            val result = webView.hitTestResult
-            when (result.type) {
-                WebView.HitTestResult.SRC_ANCHOR_TYPE -> {
-                    contextMenuLinkUrl = result.extra
-                    contextMenuImageUrl = null
-                    contextMenuX = lastTouchRawX.toInt()
-                    contextMenuY = lastTouchRawY.toInt()
-                    contextMenuTransition.targetState = true
-                }
-                WebView.HitTestResult.IMAGE_TYPE -> {
-                    contextMenuLinkUrl = null
-                    contextMenuImageUrl = result.extra
-                    contextMenuX = lastTouchRawX.toInt()
-                    contextMenuY = lastTouchRawY.toInt()
-                    contextMenuTransition.targetState = true
-                }
-                WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE -> {
-                    contextMenuLinkUrl = result.extra
-                    contextMenuImageUrl = result.extra
-                    contextMenuX = lastTouchRawX.toInt()
-                    contextMenuY = lastTouchRawY.toInt()
-                    contextMenuTransition.targetState = true
-                }
-                else -> {}
-            }
-            result.type != WebView.HitTestResult.UNKNOWN_TYPE
-        }
-
-        // Handle file downloads (Content-Disposition: attachment, "Download" links, release
-        // assets, etc.). Without this the WebView silently drops the download. Hands off to the
-        // system DownloadManager, carrying the User-Agent and cookies so authenticated downloads
-        // (e.g. GitHub) succeed.
-        webView.setDownloadListener { dlUrl, userAgent, contentDisposition, mimeType, _ ->
-            runCatching {
-                val fileName = android.webkit.URLUtil.guessFileName(dlUrl, contentDisposition, mimeType)
-                val request = DownloadManager.Request(Uri.parse(dlUrl)).apply {
-                    setMimeType(mimeType)
-                    addRequestHeader("User-Agent", userAgent)
-                    android.webkit.CookieManager.getInstance().getCookie(dlUrl)?.let {
-                        addRequestHeader("Cookie", it)
-                    }
-                    setTitle(fileName)
-                    setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-                    setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
-                }
-                (context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-                android.widget.Toast.makeText(context, "Downloading $fileName", android.widget.Toast.LENGTH_SHORT).show()
-            }.onFailure {
-                android.widget.Toast.makeText(context, "Download failed", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
 
         onDispose {
-            webView.webViewClient = WebViewClient()
-            webView.webChromeClient = null
-            webView.setOnScrollChangeListener(null)
-            webView.setOnTouchListener(null)
-            webView.setOnLongClickListener(null)
-            webView.setDownloadListener(null)
-            webView.removeJavascriptInterface("HermesBridge")
-            webView.setFindListener(null)
-            webView.clearMatches()
+            session.progressDelegate = null
+            session.navigationDelegate = null
+            session.contentDelegate = null
+            session.scrollDelegate = null
         }
     }
 
@@ -530,18 +344,14 @@ fun BrowserScreen(
                 query = findQuery,
                 activeMatch = findActiveMatch,
                 totalMatches = findTotalMatches,
-                onQueryChange = { q ->
-                    findQuery = q
-                    if (q.isNotEmpty()) webView.findAllAsync(q) else webView.clearMatches()
-                },
-                onNext = { webView.findNext(true) },
-                onPrevious = { webView.findNext(false) },
+                onQueryChange = { q -> findQuery = q /* TODO(Phase 4): session.finder.find */ },
+                onNext = { /* TODO(Phase 4) */ },
+                onPrevious = { /* TODO(Phase 4) */ },
                 onClose = {
                     showFindBar = false
                     findQuery = ""
                     findActiveMatch = 0
                     findTotalMatches = 0
-                    webView.clearMatches()
                 }
             )
         }
@@ -554,24 +364,6 @@ fun BrowserScreen(
                     prefs.edit().putBoolean("status_bar_transparent", newValue).apply()
                     onStatusBarTransparentChanged(newValue)
                     lastKnownColor.value?.let { onPageBackgroundColor(it, newValue) }
-                    // Update the spacer in the currently loaded page without waiting for next page load
-                    val density = webView.context.resources.displayMetrics.density
-                    val cssHeight = if (newValue) latestStatusBarHeight / density else 0f
-                    webView.evaluateJavascript("""
-                        (function() {
-                            if (!document.body) return;
-                            var el = document.getElementById('__hermes_spacer');
-                            if (!el) {
-                                el = document.createElement('div');
-                                el.id = '__hermes_spacer';
-                                el.style.pointerEvents = 'none';
-                                document.body.insertBefore(el, document.body.firstChild);
-                            }
-                            el.style.height = '${cssHeight}px';
-                            el.style.display = 'block';
-                            el.style.flexShrink = '0';
-                        })()
-                    """.trimIndent(), null)
                 },
                 onSetDefaultBrowser = onSetDefaultBrowser,
                 onDismiss = { showSettings = false }
@@ -616,19 +408,19 @@ fun BrowserScreen(
                 val input = addressBarText.value
                 if (input.isNotBlank()) saveRecentQuery(prefs, input)
                 recentQueries = getRecentQueries(prefs)
-                webView.loadUrl(normalizeUrl(input))
+                session.loadUri(normalizeUrl(input))
                 focusManager.clearFocus()
             },
             isLoading = isLoading.value,
-            onRefreshOrStop = { if (isLoading.value) webView.stopLoading() else webView.reload() },
+            onRefreshOrStop = { if (isLoading.value) session.stop() else session.reload() },
             onNewTab = { onNewTab(currentUrl.value.ifEmpty { "https://start.duckduckgo.com" }) },
             onOpenSettings = { showSettings = true },
             isJavaScriptEnabled = javaScriptEnabled,
             onToggleJavaScript = {
                 val newValue = !javaScriptEnabled
                 javaScriptEnabled = newValue
-                webView.settings.javaScriptEnabled = newValue
-                webView.reload()
+                session.settings.allowJavascript = newValue
+                session.reload()
             },
             onFocusGained = {
                 isAddressBarFocused.value = true
@@ -645,12 +437,11 @@ fun BrowserScreen(
             isDesktopSite = requestDesktop,
             onToggleDesktopSite = {
                 requestDesktop = !requestDesktop
-                if (requestDesktop) {
-                    webView.settings.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                } else {
-                    webView.settings.userAgentString = mobileUserAgent
-                }
-                webView.reload()
+                session.settings.userAgentMode = if (requestDesktop)
+                    GeckoSessionSettings.USER_AGENT_MODE_DESKTOP else GeckoSessionSettings.USER_AGENT_MODE_MOBILE
+                session.settings.viewportMode = if (requestDesktop)
+                    GeckoSessionSettings.VIEWPORT_MODE_DESKTOP else GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+                session.reload()
             },
             onShare = {
                 val url = currentUrl.value.ifEmpty { return@FloatingNavBar }
@@ -670,13 +461,13 @@ fun BrowserScreen(
             onSuggestionNavigate = { input ->
                 if (input.isNotBlank()) saveRecentQuery(prefs, input)
                 recentQueries = getRecentQueries(prefs)
-                webView.loadUrl(normalizeUrl(input))
+                session.loadUri(normalizeUrl(input))
                 focusManager.clearFocus()
             },
             isBookmarked = isBookmarked,
             onToggleBookmark = {
                 val url = currentUrl.value
-                val title = webView.title ?: url
+                val title = pageTitle.value.ifEmpty { url }
                 if (url.isNotEmpty() && !url.startsWith("about:") && !url.startsWith("data:")) {
                     val db = BookmarksDatabase.get(context)
                     if (isBookmarked) {
@@ -692,7 +483,7 @@ fun BrowserScreen(
             onOpenPanel = { isPanelOpen = true },
             onClosePanel = { isPanelOpen = false },
             onPanelNavigate = { url ->
-                webView.loadUrl(url)
+                session.loadUri(url)
                 isPanelOpen = false
             },
         )
