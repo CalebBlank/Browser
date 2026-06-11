@@ -210,12 +210,17 @@ class BrowserTabActivity : ComponentActivity() {
                         onPageLoaded = {
                             // Capture this page so it's ready as the snapshot for the next back gesture.
                             captureGeckoViewAsync { bmp -> currentPageShot = bmp }
-                            sendBroadcast(
-                                Intent("com.hermes.deck.ACTION_BROWSER_PAGE_LOADED").apply {
-                                    setPackage("com.hermes.deck")
-                                    putExtra("task_id", taskId)
-                                }
-                            )
+                            // Delay Deck's screenshot trigger: GeckoView's compositor paints
+                            // asynchronously after onPageStop, so an immediate capture can be blank
+                            // (a freshly-opened tab showed no preview on its Deck card). Let it paint.
+                            root.postDelayed({
+                                sendBroadcast(
+                                    Intent("com.hermes.deck.ACTION_BROWSER_PAGE_LOADED").apply {
+                                        setPackage("com.hermes.deck")
+                                        putExtra("task_id", taskId)
+                                    }
+                                )
+                            }, 400)
                         },
                         onNavigatingAway = {
                             // Save the current page as the "previous" preview for the next back gesture.
