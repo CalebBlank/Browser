@@ -50,7 +50,6 @@ class BrowserTabActivity : ComponentActivity() {
     // Fed by BrowserScreen's delegates.
     private var latestState: GeckoSession.SessionState? = null
     private var canGoBack = false
-    private val faviconCache = java.util.concurrent.ConcurrentHashMap<String, android.graphics.Bitmap>()
     private var isForeground = false
     private var pageHasLoaded = false
 
@@ -58,6 +57,9 @@ class BrowserTabActivity : ComponentActivity() {
     // (search bar, popup menu, panels all tint). Null until a favicon is decoded → system/dynamic.
     private var seedColor by mutableStateOf<Int?>(null)
     private val accentCache = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    // The domain currently shown; guards against a slow favicon fetch from an earlier navigation
+    // applying its color after the user has already moved on to a different site.
+    private var currentDomain: String? = null
 
     // Predictive-back snapshot animation.
     private var backSnapshotBitmap by mutableStateOf<android.graphics.Bitmap?>(null)
@@ -355,9 +357,9 @@ class BrowserTabActivity : ComponentActivity() {
         return (0.299 * r + 0.587 * g + 0.114 * b) / 255 > 0.5
     }
 
-    // Tab title + favicon in system recents (and Deck once integrated). GeckoView doesn't push
-    // favicons, so fetch the site's OWN /favicon.ico (engine-independent; never a third party, to
-    // avoid leaking every visited domain).
+    // Tab title + favicon in system recents (and Deck), plus the favicon-color theme seed. GeckoView
+    // doesn't push favicons, so we resolve the site's OWN icon (Favicons — first-party only, parses
+    // <link rel=icon> then falls back to /favicon.ico; engine-independent).
     private fun updateTaskDescription(url: String, title: String) {
         val label = title.ifBlank { url }.take(80)
         runCatching {
@@ -366,22 +368,21 @@ class BrowserTabActivity : ComponentActivity() {
         }
         val domain = runCatching { Uri.parse(url).host?.removePrefix("www.") }.getOrNull()
             ?.takeIf { it.isNotBlank() } ?: return
+        currentDomain = domain
+        // Fast paths from cache.
+        Favicons.cached(domain)?.let { setRecentsIcon(label, it) }
         accentCache[domain]?.let { seedColor = it }
-        faviconCache[domain]?.let { setRecentsIcon(label, it); return }
+        if (Favicons.cached(domain) != null && accentCache.containsKey(domain)) return
         Thread {
-            val bmp = runCatching {
-                val conn = java.net.URL("https://$domain/favicon.ico").openConnection() as java.net.HttpURLConnection
-                conn.connectTimeout = 4000; conn.readTimeout = 4000
-                conn.inputStream.use { android.graphics.BitmapFactory.decodeStream(it) }
-            }.getOrNull()
-            if (bmp != null) {
-                faviconCache[domain] = bmp
-                val accent = extractAccent(bmp)
-                if (accent != null) accentCache[domain] = accent
-                runOnUiThread {
-                    setRecentsIcon(label, bmp)
-                    if (accent != null) seedColor = accent
-                }
+            val bmp = Favicons.fetch(url)
+            val accent = bmp?.let { extractAccent(it) }
+            if (accent != null) accentCache[domain] = accent
+            runOnUiThread {
+                if (bmp != null) setRecentsIcon(label, bmp)
+                // Apply only if still on this domain (out-of-order navigation guard). When a site has
+                // no usable favicon, accent is null → reset to neutral so the theme stops inheriting
+                // the previous page's color.
+                if (domain == currentDomain) seedColor = accent
             }
         }.start()
     }

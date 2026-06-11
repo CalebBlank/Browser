@@ -154,6 +154,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.unit.Velocity
+import com.hermes.browser.Favicons
 import com.hermes.browser.data.BookmarksDatabase
 import com.hermes.browser.data.HistoryDatabase
 import kotlinx.coroutines.Dispatchers
@@ -1135,33 +1136,17 @@ private fun BrowserPanel(
     }
 }
 
-// Process-level favicon cache so the panel doesn't re-fetch on every open. Successful icons are
-// cached; domains that have no favicon are remembered so we don't keep retrying them.
-private val faviconCache = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
-private val faviconMisses = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
 @Composable
 private fun BookmarkFaviconItem(url: String, title: String, onClick: () -> Unit) {
     val domain = remember(url) {
         try { Uri.parse(url).host?.removePrefix("www.") ?: "" } catch (e: Exception) { "" }
     }
-    val favicon by produceState<Bitmap?>(faviconCache[domain], domain) {
+    // Shared first-party resolver (parses <link rel=icon>, falls back to /favicon.ico, caches per
+    // domain) — same path the tab uses, so e.g. Polygon's CDN-hosted icon resolves here too.
+    val favicon by produceState<Bitmap?>(Favicons.cached(domain), domain) {
         if (domain.isEmpty()) return@produceState
-        faviconCache[domain]?.let { value = it; return@produceState }
-        if (domain in faviconMisses) return@produceState
-        // Fetch the site's OWN favicon (not a third party like Google — that would leak every
-        // bookmarked domain). The site already knows you visit it.
-        val bmp = withContext(Dispatchers.IO) {
-            runCatching {
-                val conn = URL("https://$domain/favicon.ico").openConnection() as HttpURLConnection
-                conn.connectTimeout = 3000
-                conn.readTimeout = 3000
-                conn.instanceFollowRedirects = true
-                conn.inputStream.use { BitmapFactory.decodeStream(it) }
-            }.getOrNull()
-        }
-        if (bmp != null) faviconCache[domain] = bmp else faviconMisses.add(domain)
-        value = bmp
+        Favicons.cached(domain)?.let { value = it; return@produceState }
+        value = withContext(Dispatchers.IO) { Favicons.fetch(url) }
     }
     Column(
         modifier = Modifier.width(64.dp).clickable(onClick = onClick),
