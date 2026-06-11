@@ -141,6 +141,10 @@ import androidx.compose.material.icons.filled.NorthEast
 import androidx.compose.material3.HorizontalDivider
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import kotlinx.coroutines.CancellationException
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
@@ -231,6 +235,20 @@ fun BrowserScreen(
 
     var isPanelOpen by remember { mutableStateOf(false) }
     var isBookmarked by remember { mutableStateOf(false) }
+
+    // GeckoView permission bridge. Android runtime perms (camera/mic/location) go through a Compose
+    // launcher; site content/media requests (geolocation, notifications, getUserMedia) show an
+    // Allow/Block dialog (permPrompt).
+    val pendingAndroidCallback = remember { mutableStateOf<GeckoSession.PermissionDelegate.Callback?>(null) }
+    val androidPermLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        pendingAndroidCallback.value?.let { cb ->
+            if (results.values.all { it }) cb.grant() else cb.reject()
+        }
+        pendingAndroidCallback.value = null
+    }
+    var permPrompt by remember { mutableStateOf<PermPrompt?>(null) }
 
     BackHandler(enabled = searchOpen.value) {
         searchOpen.value = false
@@ -377,11 +395,70 @@ fun BrowserScreen(
             }
         }
 
+        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onAndroidPermissionsRequest(
+                s: GeckoSession,
+                permissions: Array<out String>?,
+                callback: GeckoSession.PermissionDelegate.Callback
+            ) {
+                val perms = permissions?.filterNotNull()?.toTypedArray() ?: emptyArray()
+                if (perms.isEmpty()) { callback.grant(); return }
+                pendingAndroidCallback.value = callback
+                androidPermLauncher.launch(perms)
+            }
+
+            override fun onContentPermissionRequest(
+                s: GeckoSession,
+                perm: GeckoSession.PermissionDelegate.ContentPermission
+            ): GeckoResult<Int> {
+                val result = GeckoResult<Int>()
+                when (perm.permission) {
+                    GeckoSession.PermissionDelegate.PERMISSION_AUTOPLAY_INAUDIBLE ->
+                        result.complete(GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW)
+                    GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION,
+                    GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION,
+                    GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE,
+                    GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> {
+                        permPrompt = PermPrompt(originOf(perm.uri), contentActionFor(perm.permission)) { allow ->
+                            result.complete(
+                                if (allow) GeckoSession.PermissionDelegate.ContentPermission.VALUE_ALLOW
+                                else GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY
+                            )
+                            permPrompt = null
+                        }
+                    }
+                    else -> result.complete(GeckoSession.PermissionDelegate.ContentPermission.VALUE_DENY)
+                }
+                return result
+            }
+
+            override fun onMediaPermissionRequest(
+                s: GeckoSession,
+                uri: String,
+                video: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+                audio: Array<out GeckoSession.PermissionDelegate.MediaSource>?,
+                callback: GeckoSession.PermissionDelegate.MediaCallback
+            ) {
+                val action = when {
+                    video != null && audio != null -> "use your camera and microphone"
+                    video != null -> "use your camera"
+                    audio != null -> "use your microphone"
+                    else -> { callback.reject(); return }
+                }
+                permPrompt = PermPrompt(originOf(uri), action) { allow ->
+                    if (allow) callback.grant(video?.firstOrNull(), audio?.firstOrNull())
+                    else callback.reject()
+                    permPrompt = null
+                }
+            }
+        }
+
         onDispose {
             session.progressDelegate = null
             session.navigationDelegate = null
             session.contentDelegate = null
             session.scrollDelegate = null
+            session.permissionDelegate = null
         }
     }
 
@@ -447,6 +524,16 @@ fun BrowserScreen(
                 onSelectThemeSystem = onSelectThemeSystem,
                 onSelectThemeColor = onSelectThemeColor,
                 onDismiss = { showSettings = false }
+            )
+        }
+
+        permPrompt?.let { p ->
+            AlertDialog(
+                onDismissRequest = { p.onResult(false) },
+                title = { Text(p.origin, maxLines = 1) },
+                text = { Text("Allow this site to ${p.action}?") },
+                confirmButton = { TextButton(onClick = { p.onResult(true) }) { Text("Allow") } },
+                dismissButton = { TextButton(onClick = { p.onResult(false) }) { Text("Block") } }
             )
         }
 
@@ -1349,6 +1436,22 @@ private fun FindBar(
             }
         }
     }
+}
+
+// A pending site permission prompt (geolocation / notifications / camera / mic, etc.).
+private data class PermPrompt(val origin: String, val action: String, val onResult: (Boolean) -> Unit)
+
+private fun originOf(uri: String): String = runCatching {
+    val u = Uri.parse(uri)
+    if (!u.host.isNullOrBlank()) "${u.scheme}://${u.host}" else uri
+}.getOrDefault(uri)
+
+private fun contentActionFor(permission: Int): String = when (permission) {
+    GeckoSession.PermissionDelegate.PERMISSION_GEOLOCATION -> "use your location"
+    GeckoSession.PermissionDelegate.PERMISSION_DESKTOP_NOTIFICATION -> "show notifications"
+    GeckoSession.PermissionDelegate.PERMISSION_PERSISTENT_STORAGE -> "store data on your device"
+    GeckoSession.PermissionDelegate.PERMISSION_MEDIA_KEY_SYSTEM_ACCESS -> "play protected (DRM) content"
+    else -> "access a device feature"
 }
 
 // Material seed presets for the "Theme color" picker (Website / System / a fixed accent).
